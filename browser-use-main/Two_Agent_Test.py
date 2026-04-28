@@ -7,12 +7,7 @@ This demonstrates:
 3. Using keep_alive=True to prevent browser from closing between agents
 """
 
-from browser_use import Agent, Browser, ChatBrowserUse, ActionResult
-# from browser_use import ChatGoogle  # ChatGoogle(model='gemini-3-flash-preview')
-# from browser_use import ChatAnthropic  # ChatAnthropic(model='claude-sonnet-4-6')
-from browser_use import ChatOpenAI
-from browser_use import Tools, Agent
-from browser_use.agent.service import Agent, Tools
+from browser_use import Agent, Browser, ChatOpenAI
 from browser_use.browser import BrowserSession
 import asyncio
 import os
@@ -23,6 +18,9 @@ import socket
 import sys
 import threading
 import time
+
+# 项目根目录
+BASE_DIR = Path(__file__).resolve().parent
 
 # 全局标志：用于控制是否退出
 should_quit = False
@@ -187,7 +185,7 @@ async def main():
     browser = Browser(
         # use_cloud=True,  # Use a stealth browser on Browser Use Cloud
         args=[
-            '--user-data-dir=D:\\desktop\\browser-use-main\\browser_profile'
+            f'--user-data-dir={BASE_DIR / "browser_profile"}'
         ],
         headless=False,
         enable_default_extensions=False,  # 禁用扩展以避免干扰
@@ -223,7 +221,7 @@ async def main():
             max_actions_per_step=3,  # 允许每步执行更多动作提高效率
             step_timeout=180,  # 增加单步超时时间
             llm_timeout=120,  # 增加 LLM 超时时间
-            file_system_path='D:\\desktop\\browser-use-main',
+            file_system_path=str(BASE_DIR),
         )
 
         print("\n🚀 第一个智能体开始执行任务...")
@@ -257,7 +255,7 @@ async def main():
             max_actions_per_step=3,
             step_timeout=180,
             llm_timeout=120,
-            file_system_path='D:\\desktop\\browser-use-main',
+            file_system_path=str(BASE_DIR),
         )
 
         print("\n🚀 第二个智能体开始执行任务...")

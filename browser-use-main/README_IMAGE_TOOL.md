@@ -28,9 +28,9 @@ python main.py
 这个脚本会：
 1. 访问目标网站
 2. 提取所有图片的标题信息
-3. 将标题保存到 `D:\desktop\browser-use-main\titles.txt`
+3. 将标题保存到 `项目根目录\titles.txt`
 4. 点击图片的下载链接，触发浏览器自动下载
-5. 图片会自动保存到 `D:\desktop\browser-use-main\image` 目录
+5. 图片会自动保存到 `项目根目录\image` 目录
 
 ### 步骤 3：运行重命名脚本
 
@@ -69,9 +69,9 @@ python rename_images.py
 
 ```python
 browser = Browser(
-    downloads_path=r'D:\desktop\browser-use-main\image',
+    downloads_path=r'项目根目录\image',
     args=[
-        '--download.default_directory=D:\\desktop\\browser-use-main\\image',
+        '--download.default_directory=项目根目录\\image',
         '--download.prompt_for_download=false',
         '--disable-features=DownloadBubble,ViralVideoDownloader',
     ]
@@ -83,8 +83,8 @@ browser = Browser(
 在 `rename_images.py` 中配置：
 
 ```python
-DOWNLOAD_DIR = r'D:\desktop\browser-use-main\image'      # 图片下载目录
-TITLES_FILE = r'D:\desktop\browser-use-main\titles.txt'  # 标题文件路径
+DOWNLOAD_DIR = r'项目根目录\image'      # 图片下载目录
+TITLES_FILE = r'项目根目录\titles.txt'  # 标题文件路径
 ```
 
 ## 输出示例

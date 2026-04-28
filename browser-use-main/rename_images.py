@@ -15,30 +15,36 @@ import os
 import re
 from pathlib import Path
 
+# 使用脚本所在目录作为基准路径
+BASE_DIR = Path(__file__).resolve().parent
+
 
 def sanitize_filename(filename: str) -> str:
     """
     清理文件名中的非法字符（Windows 兼容）
-    
-    Args:
-        filename: 原始文件名
-        
-    Returns:
-        清理后的文件名
     """
-    # Windows 非法字符：< > : " / \ | ? *
-    sanitized = re.sub(r'[<>:"/\\|？*]', '_', filename)
+    # 先处理换行符（在替换空格之前）
+    sanitized = filename.replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ')
+    
+    # Windows 非法字符：< > : " / \ | ? *（包括全角问号）
+    sanitized = re.sub(r'[<>:"/\\|?？*]', '_', sanitized)
     
     # 替换空白字符为下划线
     sanitized = sanitized.replace(' ', '_')
-    sanitized = sanitized.replace('\n', ' ').replace('\r', ' ')
     
-    # 移除前后空格和下划线
+    # 合并连续下划线
+    sanitized = re.sub(r'_+', '_', sanitized)
+    
+    # 移除前后下划线
     sanitized = sanitized.strip('_')
     
-    # 限制长度（Windows 最大 255 字符，留 50 个给扩展名）
+    # 限制长度（Windows 最大 255 字符，留余量给扩展名和冲突后缀）
     if len(sanitized) > 200:
-        sanitized = sanitized[:200]
+        sanitized = sanitized[:200].rstrip('_')
+    
+    # 防止空文件名
+    if not sanitized:
+        sanitized = 'unnamed'
     
     return sanitized
 
@@ -236,21 +242,16 @@ def read_file_contents(file_path: Path) -> list[str]:
 
 
 def rename_images(
-    download_dir: str = r'D:\desktop\browser-use-main\image',
-    titles_file: str = r'D:\desktop\browser-use-main\browseruse_agent_data\title.txt',
-    log_file: str = r'D:\desktop\browser-use-main\info.log'
+    download_dir: str | None = None,
+    titles_file: str | None = None,
+    log_file: str | None = None,
 ):
     """
     执行图片重命名
-    
-    Args:
-        download_dir: 图片下载目录
-        titles_file: 标题文件路径
-        log_file: info.log 文件路径（备用）
     """
-    download_path = Path(download_dir)
-    titles_path = Path(titles_file)
-    log_path = Path(log_file)
+    download_path = Path(download_dir) if download_dir else BASE_DIR / "image"
+    titles_path = Path(titles_file) if titles_file else BASE_DIR / "browseruse_agent_data" / "title.txt"
+    log_path = Path(log_file) if log_file else BASE_DIR / "info.log"
     
     print("=" * 60)
     print("[工具] 图片重命名工具")
@@ -345,13 +346,8 @@ def rename_images(
 
 
 if __name__ == "__main__":
-    # 配置参数
-    DOWNLOAD_DIR = r'D:\desktop\browser-use-main\image'
-    TITLES_FILE = r'D:\desktop\browser-use-main\browseruse_agent_data\title.txt'
-    LOG_FILE = r'D:\desktop\browser-use-main\info.log'
-    
-    # 执行重命名
-    success = rename_images(DOWNLOAD_DIR, TITLES_FILE, LOG_FILE)
+    # 使用基于脚本位置的相对路径
+    success = rename_images()
     
     if success:
         print("\n[成功] 重命名任务完成！")

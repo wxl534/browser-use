@@ -84,3 +84,10 @@ product_extraction.py
 plot.py
 
 .claude/
+
+# Runtime directories (auto-created)
+image/
+history/
+browser_profile/
+browseruse_agent_data/
+extracted_pages/

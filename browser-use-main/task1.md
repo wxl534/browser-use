@@ -103,7 +103,7 @@ wait_time = {
    - 在详情页找到"Download center image"或下载按钮
    - 观察按钮位置 3 秒后点击
    - 每个图片只用点击一次按钮
-   - 设置下载目录为：`D:\desktop\browser-use-main\image`
+   - 设置下载目录为：`项目根目录\image`
    - 点击下载按钮
    - 在确认对话框中选择"确定"完成下载
    - 等待 30-45 秒确保下载完成
@@ -169,9 +169,9 @@ wait_time = {
    ```
 
 2. **脚本自动完成以下工作**：
-   - 从 `D:\desktop\browser-use-main\browseruse_agent_data\title.txt` 读取所有 title
-   - 从 `D:\desktop\browser-use-main\browseruse_agent_data\info.txt` 读取所有介绍信息
-   - 扫描 `D:\desktop\browser-use-main\image` 目录中的所有图片文件（按修改时间排序）
+   - 从 `项目根目录\browseruse_agent_data\title.txt` 读取所有 title
+   - 从 `项目根目录\browseruse_agent_data\info.txt` 读取所有介绍信息
+   - 扫描 `项目根目录\image` 目录中的所有图片文件（按修改时间排序）
    - 将 title 按顺序分配给图片
    - 重命名图片文件为对应的 title（清理非法字符）
    - 为每个图片创建对应的 .txt 信息文件，内容为介绍信息
@@ -232,7 +232,7 @@ wait_time = {
 
 ## 重要提醒
 - 🎯 **核心策略**: 通过网站下载功能获取高清图片，不使用截图方式
-- 📁 **保存位置**: 图片下载到 `D:\desktop\browser-use-main\image` 目录
+- 📁 **保存位置**: 图片下载到 `项目根目录\image` 目录
 - 📝 **顺序对应**: title.txt 中的 title 顺序必须与下载顺序严格对应
 - ⚠️ 不要假设成功，必须验证文件存在
 - 🔍 每次下载后检查文件是否成功创建

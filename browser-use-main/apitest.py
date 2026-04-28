@@ -8,7 +8,11 @@ from dotenv import load_dotenv
 import os
 import socket
 
+from pathlib import Path
+
 load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent
 
 # 临时添加 host 映射
 def add_host_mapping(host, ip):
@@ -40,7 +44,7 @@ llm = ChatOpenAI(
 browser = Browser(
         # use_cloud=True,  # Use a stealth browser on Browser Use Cloud
         args=[
-            '--user-data-dir=D:\\desktop\\browser-use-main\\browser_profile'
+            f'--user-data-dir={BASE_DIR / "browser_profile"}'
         ],
         headless=False,
         enable_default_extensions=False,  # 禁用扩展以避免干扰

@@ -430,7 +430,7 @@ class BrowserLaunchArgs(BaseModel):
 		if self.downloads_path is None:
 			# Use fixed directory in user's workspace for consistent downloads location
 			# This makes it easier to find downloaded files across sessions
-			downloads_path = Path('D:\\desktop\\browser-use-main\\image')
+			downloads_path = Path(tempfile.mkdtemp(prefix='browser-use-downloads-'))
 			
 			# Ensure directory exists
 			downloads_path.mkdir(parents=True, exist_ok=True)

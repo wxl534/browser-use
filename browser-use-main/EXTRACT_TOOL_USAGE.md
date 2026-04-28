@@ -15,7 +15,7 @@
 
 ### 1. 创建 Information.md 文件
 
-在 `D:\desktop\browser-use-main\Information.md` 中定义要提取的 HTML 代码块：
+在 `项目根目录\Information.md` 中定义要提取的 HTML 代码块：
 
 ```markdown
 # HTML Code Blocks Information
@@ -48,12 +48,12 @@
 工具接受以下参数（通过 ExtractPageContentParams 模型）：
 
 - **output_filename**: 输出文件名（默认：`page_content.md`）
-- **output_dir**: 输出目录（默认：`D:\desktop\browser-use-main\image`）
+- **output_dir**: 输出目录（默认：`项目根目录\image`）
 - **format_type**: 格式类型，可选值：
   - `markdown`（默认）：生成带格式的 Markdown 文件
   - `json`：生成结构化 JSON 文件
   - `text`：生成纯文本文件
-- **information_file_path**: Information.md 文件路径（默认：`D:\desktop\browser-use-main\Information.md`）
+- **information_file_path**: Information.md 文件路径（默认：`项目根目录\Information.md`）
 
 ## 输出格式
 

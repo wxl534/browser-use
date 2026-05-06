@@ -77,16 +77,22 @@ async def extract_page_to_markdown(params: ExtractPageContentParams, browser_ses
     - information_file_path: Information.md文件路径
     """
     try:
-        # 路径安全检查
-        if not _is_path_allowed(params.information_file_path):
-            return ActionResult(error=f"路径不在允许范围内: {params.information_file_path}")
-        if not _is_path_allowed(params.output_dir):
-            return ActionResult(error=f"输出目录不在允许范围内: {params.output_dir}")
+        # 路径安全检查 — 如果 Agent 传了无效路径，回退到默认值
+        default_info_path = str(Path(__file__).resolve().parent / "Information.md")
+        default_output_dir = str(Path(__file__).resolve().parent / "image")
+
+        info_path = params.information_file_path
+        if not _is_path_allowed(info_path) or not Path(info_path).exists():
+            info_path = default_info_path  # 强制回退到默认路径
+
+        output_dir = params.output_dir
+        if not _is_path_allowed(output_dir):
+            output_dir = default_output_dir  # 强制回退到默认路径
 
         # 读取 Information.md 文件内容
-        info_file_path = Path(params.information_file_path)
+        info_file_path = Path(info_path)
         if not info_file_path.exists():
-            return ActionResult(error=f"Information.md文件不存在: {params.information_file_path}")
+            return ActionResult(error=f"Information.md文件不存在: {info_path}")
 
         info_content = info_file_path.read_text(encoding="utf-8")
         # 统一换行符，避免 CRLF 导致正则不匹配
@@ -196,10 +202,10 @@ async def extract_page_to_markdown(params: ExtractPageContentParams, browser_ses
         if not safe_filename.endswith(file_ext):
             safe_filename = re.sub(r'\.(md|json|txt)$', '', safe_filename) + file_ext
 
-        # 构建完整路径
-        output_dir = Path(params.output_dir)
-        output_path = output_dir / safe_filename
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # 构建完整路径（使用已验证的 output_dir）
+        output_dir_path = Path(output_dir)
+        output_path = output_dir_path / safe_filename
+        output_dir_path.mkdir(parents=True, exist_ok=True)
 
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(file_content)
@@ -270,3 +276,142 @@ def _format_output(
         md += f"**原始结束行**: `{block.get('original_end', '')}`\n\n"
         md += f"**提取的HTML代码**:\n```html\n{block.get('content', '')}\n```\n\n"
     return md, '.md'
+
+
+# === 下载格式选择工具 ===
+
+class SelectDownloadFormatParams(BaseModel):
+    """选择下载格式的参数模型"""
+    preferred_format: str = "TIFF"  # 优先选择的格式: TIFF, JPEG, GIF, JP2, JPEG2000
+
+
+@tools.action(
+    description='在LOC网站详情页中自动找到下载格式选择器(select-resource)，列出所有可用格式，选择指定格式并点击Go按钮下载。解决select_dropdown因&nbsp;特殊空格无法匹配选项文本的问题。',
+    param_model=SelectDownloadFormatParams,
+)
+async def select_download_format(params: SelectDownloadFormatParams, browser_session):
+    """
+    通过JavaScript直接操作LOC网站的下载格式<select>元素。
+
+    工作流程：
+    1. 在页面中查找 id 以 'select-resource' 开头的 <select> 元素
+    2. 读取所有 <option>，通过 data-file-download 属性匹配目标格式
+    3. 设置 selectedIndex 并触发 change 事件
+    4. 自动点击旁边的 Go 按钮触发下载
+
+    参数：
+    - preferred_format: 优先选择的格式（默认 TIFF），不区分大小写
+    """
+    try:
+        preferred = params.preferred_format.upper().strip()
+
+        js_code = '''
+        (function() {
+            try {
+                // 查找下载格式的 select 元素（id 以 select-resource 开头）
+                const selects = document.querySelectorAll('select[id^="select-resource"]');
+                if (selects.length === 0) {
+                    return { success: false, error: "页面中未找到下载格式选择器(select-resource)", available_formats: [] };
+                }
+
+                const select = selects[0];
+                const options = Array.from(select.options);
+                const preferred = "''' + preferred + '''";
+
+                // 收集所有可用格式信息
+                const formats = options.map((opt, idx) => ({
+                    index: idx,
+                    format: opt.getAttribute('data-file-download') || '',
+                    text: opt.textContent.replace(/\\u00a0/g, ' ').trim(),
+                    value: opt.value
+                }));
+
+                // 按 data-file-download 属性匹配目标格式
+                let targetIdx = -1;
+                for (let i = 0; i < options.length; i++) {
+                    const fmt = (options[i].getAttribute('data-file-download') || '').toUpperCase();
+                    if (fmt === preferred) {
+                        targetIdx = i;
+                        // 优先选择最大尺寸的（取最后一个匹配项）
+                    }
+                }
+
+                if (targetIdx === -1) {
+                    return {
+                        success: false,
+                        error: "未找到格式: " + preferred,
+                        available_formats: formats
+                    };
+                }
+
+                // 选中目标选项
+                select.selectedIndex = targetIdx;
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+
+                // 查找并点击 Go 按钮
+                const container = select.closest('.input-group-small') || select.parentElement;
+                let goButton = container ? container.querySelector('button') : null;
+                if (!goButton) {
+                    goButton = document.querySelector('button.button-default');
+                }
+
+                let clicked = false;
+                if (goButton) {
+                    goButton.click();
+                    clicked = true;
+                }
+
+                return {
+                    success: true,
+                    selected_format: formats[targetIdx].format,
+                    selected_text: formats[targetIdx].text,
+                    download_url: formats[targetIdx].value,
+                    go_clicked: clicked,
+                    available_formats: formats
+                };
+            } catch (error) {
+                return { success: false, error: error.message };
+            }
+        })()
+        '''
+
+        cdp_session = await browser_session.get_or_create_cdp_session()
+        result = await cdp_session.cdp_client.send.Runtime.evaluate(
+            params={'expression': js_code, 'returnByValue': True, 'awaitPromise': True},
+            session_id=cdp_session.session_id,
+        )
+
+        if result.get('exceptionDetails'):
+            error_text = result['exceptionDetails'].get('text', '未知JS错误')
+            return ActionResult(error=f'JavaScript执行失败: {error_text}')
+
+        data = result.get('result', {}).get('value')
+        if not data:
+            return ActionResult(error='未获取到返回数据')
+
+        if not data.get('success'):
+            formats = data.get('available_formats', [])
+            fmt_list = ', '.join(f['format'] + '(' + f['text'] + ')' for f in formats if f['format'])
+            error_msg = data.get('error', '未知错误')
+            return ActionResult(
+                error=f'{error_msg}。可用格式: {fmt_list}' if fmt_list else error_msg
+            )
+
+        selected = data.get('selected_text', '')
+        fmt = data.get('selected_format', '')
+        clicked = data.get('go_clicked', False)
+
+        msg = f"✅ 已选择下载格式: {fmt} ({selected})"
+        if clicked:
+            msg += "，并已点击Go按钮开始下载"
+        else:
+            msg += "，但未找到Go按钮，请手动点击"
+
+        return ActionResult(
+            extracted_content=msg,
+            include_in_memory=True,
+            long_term_memory=f'已选择{fmt}格式下载: {selected}',
+        )
+
+    except Exception as e:
+        return ActionResult(error=f'选择下载格式时出错: {str(e)}')

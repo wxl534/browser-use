@@ -247,8 +247,8 @@ async def main():
         downloads_path=str(image_dir),  # 下载文件保存到 image 目录
     )
 
-    api_key = '9c2fcf1e-afc3-4dc4-8b7e-636cdac31519'
-    base_url = 'https://openapi.seu.edu.cn/v1'
+    api_key = os.environ.get('OPENAI_API_KEY', '')
+    base_url = os.environ.get('OPENAI_BASE_URL', 'https://openapi.seu.edu.cn/v1')
 
     llm = ChatOpenAI(
         model='qwen3.5-397b-a17b',
@@ -269,7 +269,7 @@ async def main():
         browser=browser,
         tools=tools,
         use_vision=False,
-        max_failures=3,
+        max_failures=100,
         max_actions_per_step=3,
         step_timeout=180,
         llm_timeout=120,

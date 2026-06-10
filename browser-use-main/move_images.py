@@ -7,6 +7,16 @@ from datetime import datetime
 BASE_DIR = Path(__file__).resolve().parent
 
 
+def safe_print(message: str) -> None:
+    """
+    Windows GBK 控制台遇到梵文/变音字符文件名时可能编码失败；降级输出但不中断迁移。
+    """
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        print(message.encode('utf-8', errors='backslashreplace').decode('ascii', errors='replace'))
+
+
 def move_and_clear_images(interactive: bool = True):
     """
     清空 image 文件夹，并将内容移动到 history 文件夹。
@@ -31,7 +41,7 @@ def move_and_clear_images(interactive: bool = True):
         
         if files:
             target_dir.mkdir(exist_ok=True)
-            print(f"[信息] 准备移动 {len(files)} 个图片文件...")
+            safe_print(f"[信息] 准备移动 {len(files)} 个图片文件...")
             
             moved_count = 0
             for file_path in files:
@@ -39,22 +49,22 @@ def move_and_clear_images(interactive: bool = True):
                     if file_path.is_file():
                         shutil.move(str(file_path), str(target_dir / file_path.name))
                         moved_count += 1
-                        print(f"  [成功] {file_path.name}")
+                        safe_print(f"  [成功] {file_path.name}")
                     elif file_path.is_dir():
                         shutil.move(str(file_path), str(target_dir / file_path.name))
                         moved_count += 1
-                        print(f"  [成功] [目录] {file_path.name}")
+                        safe_print(f"  [成功] [目录] {file_path.name}")
                 except Exception as e:
-                    print(f"  [失败] 移动失败 {file_path.name}: {e}")
+                    safe_print(f"  [失败] 移动失败 {file_path.name}: {e}")
             
-            print(f"\n[成功] 完成！成功移动 {moved_count}/{len(files)} 个图片文件")
-            print(f"[信息] 目标位置：{target_dir}")
+            safe_print(f"\n[成功] 完成！成功移动 {moved_count}/{len(files)} 个图片文件")
+            safe_print(f"[信息] 目标位置：{target_dir}")
         else:
-            print(f"[警告] image 文件夹为空")
+            safe_print(f"[警告] image 文件夹为空")
     else:
-        print(f"[警告] image 文件夹不存在：{image_dir}")
+        safe_print(f"[警告] image 文件夹不存在：{image_dir}")
         image_dir.mkdir(exist_ok=True)
-        print(f"[信息] 已创建 image 文件夹")
+        safe_print(f"[信息] 已创建 image 文件夹")
     
     return True
 
@@ -126,4 +136,4 @@ if __name__ == "__main__":
     try:
         move_and_clear_images(interactive=not no_confirm)
     except Exception as e:
-        print(f"[错误] 程序执行失败：{e}")
+        safe_print(f"[错误] 程序执行失败：{e}")

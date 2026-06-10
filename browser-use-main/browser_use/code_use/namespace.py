@@ -344,6 +344,16 @@ def create_namespace(
 		if not code:
 			raise ValueError('No JavaScript code provided to evaluate()')
 
+		custom_tool_pattern = (
+			r'\b(?:collect_loc_result_queue|get_next_loc_queue_item|mark_loc_queue_item|'
+			r'wait_for_human_verification|rebuild_loc_download_state|'
+			r'extract_page_to_markdown|select_download_format)\s*\('
+		)
+		if re.search(custom_tool_pattern, code):
+			raise ValueError(
+				'禁止通过 evaluate() 调用 LOC 自定义工具。请把这些工具作为独立 tool action 直接调用。'
+			)
+
 		# Inject variables if provided
 		if variables:
 			vars_json = json.dumps(variables)

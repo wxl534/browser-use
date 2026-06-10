@@ -73,6 +73,17 @@ class DownloadsWatchdog(BaseWatchdog):
 	_download_progress_callbacks: list[Any] = PrivateAttr(default_factory=list)  # Callbacks for download progress
 	_download_complete_callbacks: list[Any] = PrivateAttr(default_factory=list)  # Callbacks for download complete
 
+	def _lightweight_downloads_enabled(self) -> bool:
+		"""
+		Use a lightweight mode for large direct downloads.
+
+		LOC TIFF downloads can stay in .crdownload for a long time. Tracking every
+		download/state event can block BrowserStateRequestEvent and eventually fill
+		the EventBus queue, so this mode keeps Chrome's download directory behavior
+		but skips browser-use download event tracking.
+		"""
+		return os.environ.get('BROWSER_USE_LIGHTWEIGHT_DOWNLOADS', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
 	def register_download_callbacks(
 		self,
 		on_start: Any | None = None,
@@ -139,6 +150,12 @@ class DownloadsWatchdog(BaseWatchdog):
 
 	async def on_BrowserStateRequestEvent(self, event: BrowserStateRequestEvent) -> None:
 		"""Handle browser state request events."""
+		if self._lightweight_downloads_enabled():
+			self.logger.debug(
+				f'[DownloadsWatchdog] Lightweight downloads enabled; skipping BrowserStateRequestEvent {event.event_id[-4:]}'
+			)
+			return
+
 		# Use public API - automatically validates and waits for recovery if needed
 		self.logger.debug(f'[DownloadsWatchdog] on_BrowserStateRequestEvent started, event_id={event.event_id[-4:]}')
 		try:
@@ -359,6 +376,26 @@ class DownloadsWatchdog(BaseWatchdog):
 			if not downloads_path_raw:
 				# logger.info(f'[DownloadsWatchdog] No downloads path configured, skipping target: {target_id}')
 				return  # No downloads path configured
+
+			if self._lightweight_downloads_enabled():
+				if self._download_cdp_session_setup:
+					return
+
+				cdp_client = self.browser_session.cdp_client
+				expanded_downloads_path = Path(downloads_path_raw).expanduser().resolve()
+				expanded_downloads_path.mkdir(parents=True, exist_ok=True)
+				await cdp_client.send.Browser.setDownloadBehavior(
+					params={
+						'behavior': 'allow',
+						'downloadPath': str(expanded_downloads_path),
+						'eventsEnabled': False,
+					}
+				)
+				self._download_cdp_session_setup = True
+				self.logger.info(
+					f'[DownloadsWatchdog] Lightweight downloads enabled; saving downloads to {expanded_downloads_path} without event tracking'
+				)
+				return
 
 			# Check if we already have a download listener on this session
 			# to prevent duplicate listeners from being added

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self, Union, cast, overload
@@ -1307,6 +1308,10 @@ class BrowserSession(BaseModel):
 		cached: bool = False,
 		include_recent_events: bool = False,
 	) -> BrowserStateSummary:
+		lightweight_dom = os.environ.get('BROWSER_USE_LIGHTWEIGHT_DOM', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+		if os.environ.get('BROWSER_USE_DISABLE_SCREENSHOTS', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
+			include_screenshot = False
+
 		if cached and self._cached_browser_state_summary is not None and self._cached_browser_state_summary.dom_state:
 			# Don't use cached state if it has 0 interactive elements
 			selector_map = self._cached_browser_state_summary.dom_state.selector_map
@@ -1335,7 +1340,16 @@ class BrowserSession(BaseModel):
 		)
 
 		# The handler returns the BrowserStateSummary directly
-		result = await event.event_result(raise_if_none=True, raise_if_any=True)
+		try:
+			if lightweight_dom:
+				result = await asyncio.wait_for(event.event_result(raise_if_none=True, raise_if_any=True), timeout=10.0)
+			else:
+				result = await event.event_result(raise_if_none=True, raise_if_any=True)
+		except Exception as e:
+			if lightweight_dom and self._cached_browser_state_summary is not None:
+				self.logger.warning(f'⚠️ Browser state timed out; using cached state: {e}')
+				return self._cached_browser_state_summary
+			raise
 		assert result is not None and result.dom_state is not None
 		return result
 

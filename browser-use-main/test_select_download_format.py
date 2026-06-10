@@ -14,6 +14,7 @@ select_download_format 工具单元测试（不使用大模型）
 
 import asyncio
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,11 +22,20 @@ from unittest.mock import AsyncMock, MagicMock
 PROJECT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_DIR))
 
+import tools_registry
 from tools_registry import (
+    ExtractPageContentParams,
+    GetNextLocQueueItemParams,
+    MarkLocQueueItemParams,
+    RebuildLocDownloadStateParams,
     SelectDownloadFormatParams,
-    select_download_format,
-    tools,
+    WaitForHumanVerificationParams,
+    get_next_loc_queue_item,
+    mark_loc_queue_item,
+    rebuild_loc_download_state,
     registry,
+    select_download_format,
+    wait_for_human_verification,
 )
 
 
@@ -62,6 +72,21 @@ def test_tool_registered():
     assert 'select_download_format' in action_names, (
         f"select_download_format 未注册! 已注册的工具: {action_names}"
     )
+    assert 'collect_loc_result_queue' in action_names, (
+        f"collect_loc_result_queue 未注册! 已注册的工具: {action_names}"
+    )
+    assert 'get_next_loc_queue_item' in action_names, (
+        f"get_next_loc_queue_item 未注册! 已注册的工具: {action_names}"
+    )
+    assert 'mark_loc_queue_item' in action_names, (
+        f"mark_loc_queue_item 未注册! 已注册的工具: {action_names}"
+    )
+    assert 'wait_for_human_verification' in action_names, (
+        f"wait_for_human_verification 未注册! 已注册的工具: {action_names}"
+    )
+    assert 'rebuild_loc_download_state' in action_names, (
+        f"rebuild_loc_download_state 未注册! 已注册的工具: {action_names}"
+    )
     print("✅ 测试 1 通过: select_download_format 已成功注册")
 
 
@@ -73,10 +98,229 @@ def test_params_default():
     """验证 SelectDownloadFormatParams 默认值为 TIFF"""
     params = SelectDownloadFormatParams()
     assert params.preferred_format == "TIFF"
+    assert params.fallback_formats == []
+    assert params.image_title is None
+    assert params.write_title_on_success is True
+    assert params.direct_download is True
     
-    params2 = SelectDownloadFormatParams(preferred_format="JPEG")
+    params2 = SelectDownloadFormatParams(preferred_format="JPEG", fallback_formats=["PNG"])
     assert params2.preferred_format == "JPEG"
+    assert params2.fallback_formats == ["PNG"]
     print("✅ 测试 2 通过: 参数模型默认值正确")
+
+
+def test_extract_path_fallbacks_and_filename_safety():
+    """extract_page_to_markdown 对 agent 乱传的目录/文件名参数应自动纠正。"""
+    original_base_dir = tools_registry.BASE_DIR
+    original_allowed_dirs = list(tools_registry.ALLOWED_BASE_DIRS)
+    with tempfile.TemporaryDirectory() as tmp:
+        base_dir = Path(tmp)
+        (base_dir / 'image').mkdir()
+        (base_dir / 'browseruse_agent_data').mkdir()
+        info_file = base_dir / 'Information.md'
+        info_file.write_text('```html\n<div>\n</div>\n```', encoding='utf-8')
+        tools_registry.BASE_DIR = base_dir
+        tools_registry.ALLOWED_BASE_DIRS[:] = [base_dir]
+        try:
+            params = ExtractPageContentParams(
+                output_filename='Buddhist temple gates; eaves [test].',
+                output_dir='.',
+                information_file_path='.',
+            )
+            resolved_info, resolved_output = tools_registry._resolve_extract_paths(params)
+            safe_name = tools_registry._safe_extract_filename(params.output_filename, '.md')
+
+            assert resolved_info == info_file
+            assert resolved_output == base_dir / 'image'
+            assert safe_name == 'Buddhist_temple_gates_eaves_test.md'
+        finally:
+            tools_registry.BASE_DIR = original_base_dir
+            tools_registry.ALLOWED_BASE_DIRS[:] = original_allowed_dirs
+
+    print("✅ 测试 2b 通过: 提取工具会回退非法路径并清理文件名")
+
+
+def test_queue_tools_get_next_and_mark_status():
+    """队列工具应能返回 pending 项、标记 in_progress，并显式更新状态。"""
+    original_base_dir = tools_registry.BASE_DIR
+    with tempfile.TemporaryDirectory() as tmp:
+        base_dir = Path(tmp)
+        queue_dir = base_dir / 'browseruse_agent_data'
+        queue_dir.mkdir()
+        queue_file = queue_dir / 'loc_result_queue.json'
+        queue_file.write_text(
+            '''
+            [
+              {"title": "Done item", "url": "https://www.loc.gov/item/done/", "status": "downloaded"},
+              {"title": "Pending item", "url": "https://www.loc.gov/item/pending/", "status": "pending", "error": "old"}
+            ]
+            ''',
+            encoding='utf-8',
+        )
+        tools_registry.BASE_DIR = base_dir
+        try:
+            next_result = run_async(get_next_loc_queue_item(params=GetNextLocQueueItemParams()))
+            queue_after_next = tools_registry._load_json_list(queue_file)
+            assert next_result.error is None
+            assert 'Pending item' in next_result.extracted_content
+            assert queue_after_next[1]['status'] == 'in_progress'
+            assert 'error' not in queue_after_next[1]
+
+            mark_result = run_async(mark_loc_queue_item(params=MarkLocQueueItemParams(
+                url='https://www.loc.gov/item/pending/?sp=1#fragment',
+                status='skipped',
+                error='no TIFF',
+                queue_filename='.loc_result_queue.json',
+            )))
+            queue_after_mark = tools_registry._load_json_list(queue_file)
+            assert mark_result.error is None
+            assert queue_after_mark[1]['status'] == 'skipped'
+            assert queue_after_mark[1]['error'] == 'no TIFF'
+
+            missing_result = run_async(mark_loc_queue_item(params=MarkLocQueueItemParams(
+                url='https://www.loc.gov/item/missing/',
+                status='skipped',
+                error='irrelevant item',
+                queue_filename='loc_result_queue',
+            )))
+            queue_after_missing = tools_registry._load_json_list(queue_file)
+            assert missing_result.error is None
+            assert queue_after_missing[-1]['url'] == 'https://www.loc.gov/item/missing/'
+            assert queue_after_missing[-1]['status'] == 'skipped'
+        finally:
+            tools_registry.BASE_DIR = original_base_dir
+
+    print("✅ 测试 2c 通过: 队列工具可领取和标记 URL")
+
+
+def test_wait_for_human_verification_resolves():
+    """人机验证工具应等待挑战页消失，而不是自动点击验证码。"""
+    mock_session = AsyncMock()
+    mock_cdp = AsyncMock()
+    mock_cdp.session_id = "test-session-id"
+    mock_cdp.cdp_client = MagicMock()
+    mock_cdp.cdp_client.send = MagicMock()
+    mock_cdp.cdp_client.send.Runtime = MagicMock()
+    mock_cdp.cdp_client.send.Runtime.evaluate = AsyncMock(side_effect=[
+        {
+            'result': {
+                'value': {
+                    'url': 'https://www.loc.gov/',
+                    'title': 'Just a moment...',
+                    'is_challenge': True,
+                    'has_verify_control': True,
+                    'text_sample': 'Verify you are human',
+                }
+            }
+        },
+        {
+            'result': {
+                'value': {
+                    'url': 'https://www.loc.gov/',
+                    'title': 'Library of Congress',
+                    'is_challenge': False,
+                    'has_verify_control': False,
+                    'text_sample': 'Library of Congress',
+                }
+            }
+        },
+    ])
+    mock_session.get_or_create_cdp_session = AsyncMock(return_value=mock_cdp)
+
+    result = run_async(wait_for_human_verification(
+        params=WaitForHumanVerificationParams(timeout_seconds=2, poll_interval_seconds=1),
+        browser_session=mock_session,
+    ))
+    assert result.error is None
+    assert '人机验证已完成' in result.extracted_content
+    assert mock_cdp.cdp_client.send.Runtime.evaluate.await_count == 2
+    print("✅ 测试 2d 通过: 人机验证工具可等待人工验证完成")
+
+
+def test_rebuild_loc_download_state_cleans_queue():
+    """重建工具应合并队列、过滤无关项，并按下载记录重建状态。"""
+    original_base_dir = tools_registry.BASE_DIR
+    with tempfile.TemporaryDirectory() as tmp:
+        base_dir = Path(tmp)
+        data_dir = base_dir / 'browseruse_agent_data'
+        image_dir = base_dir / 'image'
+        data_dir.mkdir()
+        image_dir.mkdir()
+        (image_dir / 'downloaded.tif').write_bytes(b'tiff-data')
+        (data_dir / '.loc_result_queue.json').write_text(
+            '''
+            [
+              {"title": "Yankee Stadium, New York City", "url": "https://www.loc.gov/item/2009632651/", "status": "pending"},
+              {"title": "Lhasa from the East.", "url": "https://www.loc.gov/item/2021670590/", "status": "in_progress"}
+            ]
+            ''',
+            encoding='utf-8',
+        )
+        (data_dir / 'download_record.jsonl').write_text(
+            '{"title":"Lhasa from the East.","page_url":"https://www.loc.gov/item/2021670590/","status":"downloaded","file_path":"downloaded.tif"}\n',
+            encoding='utf-8',
+        )
+        (data_dir / 'title.txt').write_text('old title\nEND\n', encoding='utf-8')
+
+        tools_registry.BASE_DIR = base_dir
+        try:
+            result = run_async(rebuild_loc_download_state(params=RebuildLocDownloadStateParams()))
+            queue = tools_registry._load_json_list(data_dir / 'loc_result_queue.json')
+            inventory = (data_dir / 'download_inventory.json').read_text(encoding='utf-8')
+            title_text = (data_dir / 'title.txt').read_text(encoding='utf-8')
+
+            assert result.error is None
+            assert len(queue) == 1
+            assert queue[0]['url'] == 'https://www.loc.gov/item/2021670590/'
+            assert queue[0]['status'] == 'downloaded'
+            assert 'Yankee Stadium' not in inventory
+            assert title_text == 'Lhasa from the East.\nEND\n'
+            assert (data_dir / 'title.txt.bak').exists()
+        finally:
+            tools_registry.BASE_DIR = original_base_dir
+
+    print("✅ 测试 2e 通过: 状态重建工具可清理队列和标题")
+
+
+def test_rebuild_reconciles_late_browser_download():
+    """重建状态时应把超时后才落盘的浏览器 TIFF 补记为成功。"""
+    original_base_dir = tools_registry.BASE_DIR
+    with tempfile.TemporaryDirectory() as tmp:
+        base_dir = Path(tmp)
+        data_dir = base_dir / 'browseruse_agent_data'
+        image_dir = base_dir / 'image'
+        data_dir.mkdir()
+        image_dir.mkdir()
+        late_file = image_dir / 'master-afc-test-afc1981004_167_01.tif'
+        late_file.write_bytes(b'tiff-data')
+        (data_dir / 'loc_result_queue.json').write_text(
+            '''
+            [
+              {"title": "Late Temple", "url": "https://www.loc.gov/item/late/", "status": "failed"}
+            ]
+            ''',
+            encoding='utf-8',
+        )
+        (data_dir / 'download_record.jsonl').write_text(
+            '{"title":"Late Temple","page_url":"https://www.loc.gov/item/late/","url":"https://tile.loc.gov/storage-services/master/afc/test/afc1981004_167_01.tif","status":"failed","error":"timeout"}\n',
+            encoding='utf-8',
+        )
+
+        tools_registry.BASE_DIR = base_dir
+        try:
+            result = run_async(rebuild_loc_download_state(params=RebuildLocDownloadStateParams()))
+            queue = tools_registry._load_json_list(data_dir / 'loc_result_queue.json')
+            records = tools_registry._load_jsonl_records(data_dir / 'download_record.jsonl')
+            title_text = (data_dir / 'title.txt').read_text(encoding='utf-8')
+
+            assert result.error is None
+            assert queue[0]['status'] == 'downloaded'
+            assert any(record.get('method') == 'browser_fallback_late' for record in records)
+            assert title_text == 'Late Temple\nEND\n'
+        finally:
+            tools_registry.BASE_DIR = original_base_dir
+
+    print("✅ 测试 2f 通过: 重建工具可补记超时后完成的浏览器下载")
 
 
 # ============================================================
@@ -98,7 +342,7 @@ def test_success_tiff():
     }
     
     mock_session = make_mock_browser_session(js_result)
-    params = SelectDownloadFormatParams(preferred_format="TIFF")
+    params = SelectDownloadFormatParams(preferred_format="TIFF", write_title_on_success=False, direct_download=False)
     
     result = run_async(select_download_format(params=params, browser_session=mock_session))
     
@@ -107,6 +351,109 @@ def test_success_tiff():
     assert "点击Go按钮开始下载" in result.extracted_content
     assert result.include_in_memory is True
     print("✅ 测试 3 通过: 成功选择 TIFF 并点击 Go")
+
+
+def test_success_tiff_writes_title():
+    """Python 直接下载成功后立即把标题写入真实 title.txt。"""
+    js_result = {
+        'success': True,
+        'selected_format': 'TIFF',
+        'selected_text': 'TIFF (36.1 MB)',
+        'download_url': 'https://tile.loc.gov/storage-services/master/afc/test.tif',
+        'page_title': 'Test Image Title',
+        'go_clicked': True,
+        'available_formats': [
+            {'index': 1, 'format': 'TIFF', 'text': 'TIFF (36.1 MB)', 'value': 'url2'},
+        ]
+    }
+
+    mock_session = make_mock_browser_session(js_result)
+
+    original_base_dir = tools_registry.BASE_DIR
+    original_download_file = tools_registry._download_file
+    with tempfile.TemporaryDirectory() as tmp:
+        tools_registry.BASE_DIR = Path(tmp)
+        try:
+            async def fake_download_file(url, title, output_dir=None, timeout_seconds=180, referer=None, cookies=None):
+                target = (output_dir or Path(tmp) / 'image') / 'Test_Image_Title.tif'
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b'tiff-data')
+                assert referer in (None, '', js_result.get('page_url'))
+                return target
+
+            tools_registry._download_file = fake_download_file
+            params = SelectDownloadFormatParams(preferred_format="TIFF", image_title="Test Image Title")
+            result = run_async(select_download_format(params=params, browser_session=mock_session))
+            title_file = Path(tmp) / 'browseruse_agent_data' / 'title.txt'
+            record_file = Path(tmp) / 'browseruse_agent_data' / 'download_record.jsonl'
+            assert result.error is None
+            assert "直接下载" in result.extracted_content
+            assert title_file.read_text(encoding='utf-8') == 'Test Image Title\n'
+            assert '"status": "downloaded"' in record_file.read_text(encoding='utf-8')
+            assert str(title_file) in result.extracted_content
+        finally:
+            tools_registry.BASE_DIR = original_base_dir
+            tools_registry._download_file = original_download_file
+
+    print("✅ 测试 3b 通过: 成功点击下载后立即写入 title.txt")
+
+
+def test_direct_download_uses_browser_fallback():
+    """Python 直连 403 时，回退到浏览器点击下载并等待文件出现。"""
+    js_result = {
+        'success': True,
+        'selected_format': 'TIFF',
+        'selected_text': 'TIFF (36.1 MB)',
+        'download_url': 'https://tile.loc.gov/storage-services/master/afc/test.tif',
+        'page_url': 'https://www.loc.gov/item/test/',
+        'page_title': 'Fallback Image Title',
+        'go_clicked': False,
+        'available_formats': [
+            {'index': 1, 'format': 'TIFF', 'text': 'TIFF (36.1 MB)', 'value': 'url2'},
+        ]
+    }
+
+    mock_session = make_mock_browser_session(js_result)
+
+    original_base_dir = tools_registry.BASE_DIR
+    original_download_file = tools_registry._download_file
+    original_click = tools_registry._click_selected_download_button
+    original_wait = tools_registry._wait_for_browser_tiff_download
+    with tempfile.TemporaryDirectory() as tmp:
+        tools_registry.BASE_DIR = Path(tmp)
+        try:
+            async def fake_download_file(*args, **kwargs):
+                raise RuntimeError('HTTP 403: blocked')
+
+            async def fake_click(browser_session):
+                return None
+
+            async def fake_wait(output_dir, before, timeout_seconds):
+                target = output_dir / 'browser_fallback.tif'
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b'tiff-data')
+                return target
+
+            tools_registry._download_file = fake_download_file
+            tools_registry._click_selected_download_button = fake_click
+            tools_registry._wait_for_browser_tiff_download = fake_wait
+
+            params = SelectDownloadFormatParams(preferred_format="TIFF", image_title="Fallback Image Title")
+            result = run_async(select_download_format(params=params, browser_session=mock_session))
+            record_file = Path(tmp) / 'browseruse_agent_data' / 'download_record.jsonl'
+            record = record_file.read_text(encoding='utf-8')
+
+            assert result.error is None
+            assert "浏览器兜底下载" in result.extracted_content
+            assert '"status": "downloaded"' in record
+            assert '"method": "browser_fallback"' in record
+        finally:
+            tools_registry.BASE_DIR = original_base_dir
+            tools_registry._download_file = original_download_file
+            tools_registry._click_selected_download_button = original_click
+            tools_registry._wait_for_browser_tiff_download = original_wait
+
+    print("✅ 测试 3c 通过: Python 直连失败时可使用浏览器兜底下载")
 
 
 # ============================================================
@@ -118,6 +465,7 @@ def test_format_not_found():
     js_result = {
         'success': False,
         'error': '未找到格式: TIFF',
+        'requested_formats': ['TIFF'],
         'available_formats': [
             {'index': 0, 'format': 'JPEG', 'text': 'JPEG (330x223px)', 'value': 'url1'},
             {'index': 1, 'format': 'GIF', 'text': 'GIF (16.7 KB)', 'value': 'url2'},
@@ -125,7 +473,7 @@ def test_format_not_found():
     }
     
     mock_session = make_mock_browser_session(js_result)
-    params = SelectDownloadFormatParams(preferred_format="TIFF")
+    params = SelectDownloadFormatParams(preferred_format="TIFF", fallback_formats=[])
     
     result = run_async(select_download_format(params=params, browser_session=mock_session))
     
@@ -149,7 +497,7 @@ def test_no_select_element():
     }
     
     mock_session = make_mock_browser_session(js_result)
-    params = SelectDownloadFormatParams()
+    params = SelectDownloadFormatParams(write_title_on_success=False, direct_download=False)
     
     result = run_async(select_download_format(params=params, browser_session=mock_session))
     
@@ -174,7 +522,7 @@ def test_success_no_go_button():
     }
     
     mock_session = make_mock_browser_session(js_result)
-    params = SelectDownloadFormatParams()
+    params = SelectDownloadFormatParams(write_title_on_success=False, direct_download=False)
     
     result = run_async(select_download_format(params=params, browser_session=mock_session))
     
@@ -242,7 +590,7 @@ def test_case_insensitive():
     mock_session = make_mock_browser_session(js_result)
     
     # 小写输入
-    params = SelectDownloadFormatParams(preferred_format="tiff")
+    params = SelectDownloadFormatParams(preferred_format="tiff", write_title_on_success=False, direct_download=False)
     result = run_async(select_download_format(params=params, browser_session=mock_session))
     
     assert result.error is None
@@ -278,7 +626,14 @@ if __name__ == '__main__':
     tests = [
         test_tool_registered,
         test_params_default,
+        test_extract_path_fallbacks_and_filename_safety,
+        test_queue_tools_get_next_and_mark_status,
+        test_wait_for_human_verification_resolves,
+        test_rebuild_loc_download_state_cleans_queue,
+        test_rebuild_reconciles_late_browser_download,
         test_success_tiff,
+        test_success_tiff_writes_title,
+        test_direct_download_uses_browser_fallback,
         test_format_not_found,
         test_no_select_element,
         test_success_no_go_button,

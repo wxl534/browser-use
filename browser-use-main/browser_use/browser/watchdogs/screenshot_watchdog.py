@@ -1,5 +1,6 @@
 """Screenshot watchdog for handling screenshot requests using CDP."""
 
+import os
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from bubus import BaseEvent
@@ -24,7 +25,7 @@ class ScreenshotWatchdog(BaseWatchdog):
 	EMITS: ClassVar[list[type[BaseEvent[Any]]]] = []
 
 	@observe_debug(ignore_input=True, ignore_output=True, name='screenshot_event_handler')
-	async def on_ScreenshotEvent(self, event: ScreenshotEvent) -> str:
+	async def on_ScreenshotEvent(self, event: ScreenshotEvent) -> str | None:
 		"""Handle screenshot request using CDP.
 
 		Args:
@@ -34,6 +35,10 @@ class ScreenshotWatchdog(BaseWatchdog):
 			Dict with 'screenshot' key containing base64-encoded screenshot or None
 		"""
 		self.logger.debug('[ScreenshotWatchdog] Handler START - on_ScreenshotEvent called')
+		if os.environ.get('BROWSER_USE_DISABLE_SCREENSHOTS', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
+			self.logger.debug('[ScreenshotWatchdog] Screenshots disabled by BROWSER_USE_DISABLE_SCREENSHOTS')
+			return None
+
 		try:
 			# Validate focused target is a top-level page (not iframe/worker)
 			# CDP Page.captureScreenshot only works on page/tab targets

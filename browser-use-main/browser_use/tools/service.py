@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Generic, TypeVar
 
 import anyio
@@ -49,12 +50,12 @@ from browser_use.tools.views import (
 	NoParamsAction,
 	ReadContentAction,
 	ScreenshotAction,
-	SmartScreenshotAction,
 	ScrollAction,
 	SearchAction,
 	SearchPageAction,
 	SelectDropdownOptionAction,
 	SendKeysAction,
+	SmartScreenshotAction,
 	StructuredOutputAction,
 	SwitchTabAction,
 	UploadFileAction,
@@ -90,10 +91,11 @@ def _detect_image_boundaries(screenshot_bytes: bytes, min_area: int = 10000,
 	try:
 		# 延迟导入依赖（避免硬依赖）
 		try:
+			import io
+
 			import cv2
 			import numpy as np
 			from PIL import Image
-			import io
 		except ImportError as e:
 			logger.warning(f"⚠️ 图片边界检测需要安装依赖：{e}")
 			logger.warning("💡 请运行：uv add opencv-python pillow numpy")
@@ -1524,8 +1526,9 @@ You will be given a query and the markdown of a webpage that has been filtered t
 					)
 				
 				# 3. 加载完整截图
-				from PIL import Image
 				import io
+
+				from PIL import Image
 				full_image = Image.open(io.BytesIO(screenshot_bytes))
 				
 				# 4. 确定输出目录
@@ -2038,6 +2041,21 @@ Context: {context}"""
 		)
 		async def evaluate(code: str, browser_session: BrowserSession):
 			# Execute JavaScript with proper error handling and promise support
+			custom_tool_pattern = (
+				r'\b(?:collect_loc_result_queue|get_next_loc_queue_item|mark_loc_queue_item|'
+				r'wait_for_human_verification|rebuild_loc_download_state|'
+				r'extract_page_to_markdown|select_download_format)\s*\('
+			)
+			if re.search(custom_tool_pattern, code or ''):
+				return ActionResult(
+					error=(
+						'禁止通过 evaluate() 调用 LOC 自定义工具。'
+						'请把 collect_loc_result_queue/get_next_loc_queue_item/'
+						'mark_loc_queue_item/wait_for_human_verification/'
+						'rebuild_loc_download_state/extract_page_to_markdown/'
+						'select_download_format 作为独立 tool action 直接调用。'
+					)
+				)
 
 			cdp_session = await browser_session.get_or_create_cdp_session()
 
@@ -2093,8 +2111,6 @@ Validated Code (after quote fixing):
 				else:
 					# Primitive values (string, number, boolean)
 					result_text = str(value)
-
-				import re
 
 				image_pattern = r'(data:image/[^;]+;base64,[A-Za-z0-9+/=]+)'
 				found_images = re.findall(image_pattern, result_text)

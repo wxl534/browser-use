@@ -1,198 +1,225 @@
-# 图片下载任务配置
+# IDP “ssu” 图片下载任务
 
 ## 任务目标
-搜索并下载 n = 3 张 'buddhist temple' 相关图片到本地 image 目录，自动识别图片下载链接并下载，使用网页中的图片标题命名，并使用工具提取图片信息。
 
-## 执行流程概览
-1. **搜索识别**：访问 https://www.loc.gov，通过人机识别，搜索 'buddhist temple'
-2. **筛选结果**：点击 'Photo, Print, Drawing' 筛选可下载图片
-3. **批量处理**：对每张图片执行以下操作：
-   - 点击图片进入详情页
-   - **调用 extract_page_to_markdown 工具**提取页面信息（使用默认参数即可，可指定 output_filename）
-   - 选择 TIFF 格式并点击下载
-   - 返回搜索结果页继续下一张
-4. **保存汇总**：处理完成后将所有 title 写入 title.txt，用于后续重命名
+访问 **`https://idp.bl.uk/`**，搜索关键词 **`ssu`**，按搜索结果顺序下载 **前 n = 5000 张与“ssu / Chinese Buddhist / Buddhist in China / China-related Buddhist context”相关的有效图片** 到本地 `image` 目录，并提取每张图片对应的藏品信息。
 
-## 详细执行步骤
+本任务采用“下载即最终命名”逻辑：每成功保存一张图片后，工具必须立即计算图片内容 hash，用 `title + short_hash` 生成最终文件名，并立刻写入结构化记录。`title.txt` 只作为可读导出，不再作为最终重命名依据。优先调用 `download_current_idp_search_page_images` 批量处理当前 IDP 搜索结果页；只有批量工具无法处理某个单项时，才退回 `download_image_from_url`。
 
-### 阶段 1 - 搜索与识别
-1. **访问网站 https://www.loc.gov**
+## 允许访问的网站
 
-2. **搜索关键词：'buddhist temple'**
-   - 在搜索框输入关键词并提交
-   - 验证搜索成功：检查页面中是否有图片结果
+只允许访问以下官方域名及其页面内直接引用的官方图片资源：
 
-### 阶段 2 - 下载图片（核心功能）
-**对每张图片（共 n 张）执行以下操作：**
+1. `https://idp.bl.uk/`
+2. `https://www.bl.uk/`
+3. 页面中由 IDP / British Library 官方直接引用的图片、IIIF、缩略图或大图资源域名
 
-**⚠️ 每张图片只需 4 步：**
-1. Step 1: 点击图片进入详情页 + **调用 extract_page_to_markdown 工具**（以照片标题命名）
-2. Step 2: **调用 select_download_format 工具**选择 TIFF 格式并自动点击 Go 下载
-3. Step 3: **立即将该图片的 title 追加写入 browseruse_agent_data/title.txt**
-4. Step 4: 点击 "Back to Search Results" 返回
+不要访问非官方图片搜索引擎、社交媒体或无关外站。
 
-**必须使用的自定义工具：**
-- **extract_page_to_markdown**: 从当前网页提取符合 Information.md 中 HTML 代码块首尾行的内容，保存为文件
-  ```
-  使用方法：调用 extract_page_to_markdown 工具
-  参数：
-    output_filename: "照片标题.md"  （使用照片标题命名）
-  ⚠️ 其余参数必须使用默认值！不要传入 output_dir、information_file_path 参数！
-  ⚠️ 绝对禁止传入绝对路径或相对路径如 "../Information.md" 或 "/C:/Users/..."
-  ```
-- **select_download_format**: 自动找到页面中的下载格式选择器，选择指定格式并点击 Go 下载
-  ```
-  使用方法：调用 select_download_format 工具
-  参数：
-    preferred_format: "TIFF"  （默认值，通常不需要修改）
-  ```
-  - ⚠️ **必须使用此工具代替手动操作下拉框**，因为页面下拉框选项文本含特殊字符，select_dropdown 无法正确匹配
-  - 工具会自动通过 JavaScript 操作 `<select id="select-resource0">` 元素
-  - 如果没有 TIFF 选项，工具会返回所有可用格式列表，可据此选择其他格式
-  - 工具会自动点击 Go 按钮，无需手动点击
-  - 🚫 **绝对禁止用 evaluate 执行此工具！** 它是注册的 action 工具，必须像 extract_page_to_markdown 一样直接调用，不是 JavaScript 函数！
-  - ✅ 正确方式：`select_download_format(preferred_format="TIFF")` 作为工具 action 调用
-  - ❌ 错误方式：`evaluate(code="select_download_format(preferred_format='TIFF')")` — 这会导致 JS 报错
+## 核心原则
 
-- **工具说明（extract_page_to_markdown）**：
-  - 自动读取 Information.md 中定义的 HTML 代码块首尾行模式
-  - 在当前网页源代码中查找匹配的 HTML 片段
-  - 将匹配内容保存为 Markdown/JSON/Text 文件
-  - 需要先在 Information.md 中配置好要提取的 HTML 模式
+1. 目标是 **5000 张成功保存的有效图片**，不是 5000 次尝试。
+2. 搜索关键词固定为 `ssu`。
+3. 按 IDP 搜索结果顺序处理，不要随机挑选。
+4. 每个详情页可保存 1 张或多张可见馆藏图片；总数达到 5000 张后停止。
+5. 只保存馆藏图片，不保存 logo、按钮、Cookie 横幅、导航栏、社交分享图标、页面装饰图。
+6. 每成功保存一张图片后，必须立刻最终命名并记录这张图；优先用 `download_image_from_url` 自动找图、保存、hash 去重、最终命名并记录，只有图片已经通过其他方式真实落地到 `image` 目录后，才单独调用 `record_downloaded_image`。
+7. `record_downloaded_image` 会计算 `content_hash` / `source_hash` / `title_hash`，把临时图片立即改为最终文件名，并自动维护 `browseruse_agent_data/image_record.jsonl`、`browseruse_agent_data/title.txt` 和 `browseruse_agent_data/temple_photo_info.md`。
+8. `title.txt` 只是人工查看用的导出文件，不允许依赖它做最终重命名。
+9. 不要重复处理同一详情页 URL、同一图片 URL 或同一图片内容。
 
-**下载流程（使用 select_download_format 工具）**
-   - 进入详情页后，**直接调用 select_download_format(preferred_format="TIFF")** 作为工具 action
-   - ⚠️ **调用方式必须与 extract_page_to_markdown 完全一致** — 作为注册的工具 action 调用，不是 evaluate/JavaScript
-   - 工具会自动完成：查找选择器 → 选择 TIFF → 点击 Go 下载
-   - 如果工具返回"未找到格式: TIFF"，说明该图片没有 TIFF 选项，直接跳过返回继续下一张
-   - **不要使用 select_dropdown 或手动点击下拉框**，直接用此工具
-   - **不要使用 evaluate 执行此工具**，它不是浏览器 JavaScript 函数
+## 推荐执行流程
 
-**⚠️ 重要优化指令：**
-- **每处理完一张图片，立即将 title 追加写入 title.txt**（只传文件名 "title.txt"，不传路径）
-- **调用 extract_page_to_markdown 时只传 output_filename 参数**，其他参数不要传
-- 不要验证下载是否成功（下载会自动完成）
-- **完全禁用截图功能**：不截图、不等待截图超时
-- 使用 JavaScript 提取页面内容，比视觉识别更快速准确
+### 阶段 1：进入 IDP 并搜索
 
-**重复以上步骤直到处理完 n 张图片**
+1. 打开 `https://idp.bl.uk/`。
+2. 如果出现 Cookie 横幅，点击同意或关闭。
+3. 在网站搜索框中输入关键词 `ssu` 并搜索。
+4. 如果搜索结果支持筛选或排序，保持默认相关性排序；如果支持每页显示数量，优先选择 50 或 100。
 
-### 阶段 3 - 记录 title（每张图片处理后立即写入）
-1. **每处理完一张图片，立即追加写入 title.txt**
-   - 使用 write_file 工具，**file_path 只传文件名 "title.txt"**（不要传完整路径！）
-   - ⚠️ 错误写法：`file_path: "C:/Users/.../title.txt"` — 会导致文件找不到
-   - ✅ 正确写法：`file_path: "title.txt"`
-   - 第一张图片写入时创建文件，后续追加
-   - **所有 n 张图片处理完成后，在文件末尾追加 "END" 标记**
+### 阶段 2：按顺序处理搜索结果
 
-2. **输出格式要求**：
-   ```
-   [标题 1]
-   [标题 2]
-   ...
-   [标题 n]
-   END
-   ```
+对搜索结果页按从上到下、从左到右的顺序处理。为了效率，必须优先使用批量工具：
 
-3. **注意事项**：
-   - 必须换行输出，不能使用 `\n` 字符
-   - title 顺序必须与下载顺序严格对应
-   - 最后一张图片处理完后，追加 "END" 标记
-   - 如果某张图片被跳过（无 TIFF），不写入该图片的 title
+```text
+download_current_idp_search_page_images(
+  target_count=5000,
+  max_items=50,
+  start_index=0,
+  images_per_item=1,
+  file_prefix="temple",
+  title_prefix="ssu",
+  allowed_host_suffixes=["idp.bl.uk", "data.idp.bl.uk", "bl.uk"],
+  record_filename="image_record.jsonl",
+  info_filename="temple_photo_info.md"
+)
+```
 
-## 工具与脚本说明
+该工具会在浏览器上下文中批量提取当前页藏品 URL、解析官方 IIIF manifest、下载主图、按 title+hash 立即最终命名并写入 `image_record.jsonl` / `title.txt`，不要再对同一页逐个结果手动点击、逐张调用 LLM 决策。
 
-### browser-use 内置功能
-- **文件下载**：自动识别下载链接或使用图片 URL 下载
-- **JavaScript 执行**：用于分析 DOM 并提取图片 title
-- **文件写入**：使用 write_file 动作将 title 列表保存到 browseruse_agent_data/title.txt
-- **页面导航**：click、go_to_url、navigate_back 等操作
+批量工具会自动维护 `browseruse_agent_data/idp_progress.json`，其中包含下一次续跑应使用的 `next_page` 和 `next_index`。断点续跑时必须优先相信这个进度文件，不要仅凭最大图片序号猜测页码。
 
-### 自定义工具: extract_page_to_markdown（页面提取工具）
-- **功能**: 使用 JavaScript 从当前网页提取符合 Information.md 中 HTML 代码块首尾行的内容，保存为文件
-- **工作流程**:
-  1. 进入照片详情页
-  2. 调用 extract_page_to_markdown 工具（指定 output_filename，其余用默认值）
-  3. 工具自动执行：
-     - 读取 Information.md 中的 HTML 代码块模式
-     - 在页面源代码中查找匹配内容
-     - 保存到 image 目录
-  4. 继续下载流程
-- **前提条件**: 需要先在 Information.md 中配置好 HTML 代码块模式（用 ```html ... ``` 包裹首尾行）
+续跑必须按 `idp_progress.json` 的页码顺序递增处理；不要自行跳到 page 999、page 5000 或其他极深页。如果某一页批量工具 0 新增、manifest 大量失败或超时，应记录该页失败并进入下一页继续批量处理，不要退化为逐个点击详情页。
 
-### 自定义工具: select_download_format（下载格式选择工具）
-- **功能**: 通过 JavaScript 自动操作 LOC 网站的下载格式 `<select>` 元素，选择指定格式并点击 Go 下载
-- **为什么需要此工具**: 页面下拉框选项文本包含 `&nbsp;`（不间断空格），导致 browser-use 内置的 `select_dropdown` 无法匹配选项
-- **工作流程**:
-  1. 在页面中查找 `id` 以 `select-resource` 开头的 `<select>` 元素
-  2. 通过 `data-file-download` 属性精准匹配目标格式（不依赖文本内容）
-  3. 设置 `selectedIndex` 并触发 `change` 事件
-  4. 自动找到并点击旁边的 Go 按钮
-- **调用方式**: `select_download_format(preferred_format="TIFF")`
-- **返回结果**:
-  - 成功：返回已选择的格式和下载 URL
-  - 失败：返回错误信息和所有可用格式列表（可据此重新选择）
+如果批量工具报告当前页有个别藏品失败，再对失败项按以下单项流程处理：
 
-## 错误处理
+1. 打开第一个未处理的详情页。
+2. 提取标题、详情页 URL、馆藏号、作者/制作者、年代、地点、分类、说明文字。
+3. 确认页面与 `ssu` 或中国佛教语境有关。只要标题、说明、地点、来源、相关寺院、英文说明中的 `China`、`Chinese`、`Buddhist`、`Buddhism`、`Buddhist temple`、`monastery`、`cave temple`、`佛教`、`佛`、`寺`、`中国` 等字段存在相关证据，即可视为相关。
+4. 优先在详情页 DOM 中查找可打开的大图、IIIF 图片、viewer 图片、download image 链接或缩略图对应的大图 URL。
+5. 如果详情页包含多张相关图片，按页面图片顺序逐张保存；如果只需要单张，保存主图。
+6. 如果需要人工确认页面内容，可以用 `evaluate` 查询当前页面 DOM，提取页面标题、详情信息、说明文字、图片链接、viewer 中的图片 URL 和下载按钮链接。
+7. 当前详情页处理完成后，返回搜索结果页，继续下一个结果。
+8. 当前页处理完后，如果总保存数量仍不足 5000，必须用 `navigate_idp_search_page(keyword="ssu", page=下一页, limit=50)` 跳转，不要手写搜索 URL。
 
-### 工具执行失败（重要）
-- 如果 extract_page_to_markdown 工具失败：
-  - **不要停止**，尝试手动使用 JavaScript 提取页面信息
-  - 记录失败的图片，继续处理下一张
-  - **不要连续失败 3 次就放弃**，必须处理完所有 n 张图片
+## 图片保存规则
 
-### 下载格式选择失败
-- 如果 select_download_format 返回"未找到格式: TIFF"：
-  - 查看返回的可用格式列表，如果有其他格式（如 JPEG）可尝试选择
-  - 如果完全没有下载选项（select-resource 不存在），直接跳过该图片
-  - **不要回退使用 select_dropdown 或手动操作下拉框**
+优先保存详情页或图片查看器中的最大可用图片。有效图片可能来自：
 
-### 页面元素定位失败（重要！）
-- 如果点击某个元素报错 "Element index not available" 或 "invalid element index"：
-  - **不要反复尝试同一个 index**
-  - 先使用 `scroll(down=True, pages=1)` 不带 index 参数来滚动页面
-  - 滚动后页面元素会重新编号，使用新的 index
-  - 如果连续 2 次定位失败，使用 `navigate(url="当前搜索结果页URL")` 刷新页面
-- 如果反复点击到已处理过的图片：
-  - 记住已处理图片的标题，通过标题文字区分
-  - 使用 `scroll(down=True, pages=2)` 向下滚动让新图片出现
-  - 或直接点击 "Next" 翻到下一页搜索结果
+```text
+IDP / British Library 官方详情页中的 img src
+IIIF image URL
+viewer 使用的大图 URL
+download image 链接
+缩略图对应的大图 URL
+```
 
-### 网页打开失败
-- 如果网页打开失败，如等待超时，不要停止程序，退回到上一个页面继续处理下一张图片
+每张图片保存到项目根目录的 `image` 目录，文件名序号从 `temple_001` 开始递增到 `temple_5000`。不能手动重置到 1；必须使用当前下一安全序号，确保不会覆盖已有图片。
 
-### 通用错误恢复策略（核心原则）
-- ⚠️ **无论遇到什么错误，绝对不要调用 done 终止任务**
-- 遇到任何错误时：跳过当前图片 → 返回搜索结果 → 继续下一张
-- 如果当前页面状态混乱，使用 navigate 回到搜索结果页的 URL 重新开始
-- 只有处理完所有 n 张图片后，才能调用 done 结束任务
+保存要求：
 
-### 标题提取失败
-- 如果无法找到标题，使用 URL 中的文件名作为替代
-- 在 title.txt 中记录为占位符（如 `image_1`, `image_2`）
+1. 如果一页有多张相关大图，按页面图片顺序保存，例如 `temple_001`、`temple_002`。
+2. 优先保存原始图片字节或网站提供的大图；到达详情页或 viewer 后应直接调用 `download_image_from_url`，不要停留在图片页反复滚动。
+3. `download_image_from_url` 会按学习到的顺序尝试 Python 直连、浏览器上下文 fetch、干净截图裁剪兜底；如果传入的是 IDP 详情页 URL、IIIF manifest URL 或 IIIF 大图 URL，工具会优先解析真实大图 URL 并检查是否已有记录；如果工具提示“图片 URL 已有下载记录”“图片内容已有下载记录”或“image 目录中已存在相同图片内容”，视为当前图片已处理成功，直接继续下一条。
+4. 如果工具返回普通失败（包括图片文件过小、尺寸过小、像素几乎单色、非法 IDP 详情页 URL），不要反复 scroll，重试 1 次后跳过当前图片并继续下一条。
+5. 不要保存缩略图；如果只能看到缩略图，优先打开详情页大图、viewer 或下载链接。
+6. 不要下载 PDF、视频、音频或网页附件。
+7. 不要为了达到 n 张而保存无关图片或页面截图。
 
-### 重命名失败
-- 如果 title.txt 不存在，脚本会提示错误
-- 如果图片数量与 title 数量不匹配，只处理较小数量的那一方
-- 如果文件名冲突，自动添加序号后缀（如 `title_1.png`, `title_2.png`）
+## 写入结构化记录
 
-## 动态内容处理
-- 🔄 如果页面使用懒加载，先滚动到页面底部
-- ⏱️ 等待所有图片加载完成（检查网络活动静止）
-- 📄 如果图片数量不足 n，尝试翻页或加载更多
-- 🔍 尝试不同的下载方式（直接下载、右键另存为等）
+到达详情页、viewer 或已经拿到图片 URL 后，每张图片立即调用：
 
-## 重要提醒
-- **核心策略**: 使用 extract_page_to_markdown 工具提取页面内容，结合下载功能完成任务
-- 📁 **保存位置**:
-  - 图片自动下载到 image 目录
-  - 提取的网页内容也保存到 image 目录（仅存档）
-  - **标题列表保存到 browseruse_agent_data/title.txt**（用于重命名）
-- ⚡ **高效处理**: 每张图片只需 3 步（进入+提取 → 选择下载 → 返回）
-- ⏱️ **跳过验证**: 不验证下载、**完全禁用截图**、不等待太久
-- 🔄 **跳过无权限**: 没有 TIFF 选项的图片直接跳过
-- 📊 **即时写入**: 每张图片处理完立即追加 title 到 title.txt，最后追加 END 标记
-- 💾 **关键流程**: 进入详情页 → extract_page_to_markdown(提取页面内容) → select_download_format(选择TIFF并下载) → 追加title到title.txt → 返回 → 继续下一张
-- 🔧 **技术配置**: use_vision=False，完全关闭视觉识别和截图功能
-- 📝 **工具说明**: extract_page_to_markdown 需要配合 Information.md 使用，确保已配置好提取模式
-- 🚫 **禁止操作**: 不要使用 select_dropdown、click 下拉框、evaluate 等方式选择下载格式，必须使用 select_download_format 工具作为 action 调用（与 extract_page_to_markdown 调用方式一致）
+```text
+download_image_from_url(
+  sequence=当前下一安全序号（必须确认没有被使用，不能重置为 1）,
+  file_name="temple_当前序号",
+  title="ssu_当前序号_藏品标题_图1",
+  collection_title="页面显示的藏品标题",
+  page_url="当前详情页 URL",
+  image_url="从 DOM、viewer、IIIF manifest、IIIF 大图或下载链接提取到的完整 URL；如果尚未提取到可留空让工具自动找图",
+  evidence="标题/说明/地点/来源中与 ssu 相关的证据",
+  metadata="作者、时代、地点、分类、馆藏号；没有就写未显示",
+  summary="图片内容和相关信息的中文简述",
+  allowed_host_suffixes=["idp.bl.uk", "data.idp.bl.uk", "bl.uk"],
+  record_filename="image_record.jsonl",
+  info_filename="temple_photo_info.md"
+)
+```
+
+只有图片已经用其他可靠方式保存到 `image` 目录时，才单独调用 `record_downloaded_image`；不要把 `record_downloaded_image` 当作下载工具，它只负责记录已存在的文件。
+
+标题要求：
+
+1. 一张图片只写一行标题。
+2. 只有图片成功保存后才写标题。
+3. 不要提前批量写标题。
+4. 不要手动写 `title.txt` 或 `END`，`record_downloaded_image` 和程序收尾会自动处理。
+5. 不要使用 `write_file` 记录标题，不要手动追加 `temple_photo_info.md`。
+6. 标题应简短、稳定，避免方括号、引号、斜杠、冒号、问号、句号结尾等特殊字符。
+7. 推荐格式：
+
+```text
+ssu_001_藏品标题_图1
+ssu_002_藏品标题_图2
+```
+
+## 提取并保存信息
+
+`record_downloaded_image` 会自动根据 `image_record.jsonl` 重写：
+
+```text
+title.txt
+temple_photo_info.md
+```
+
+每条记录必须包含：
+
+| 字段 | 要求 |
+|---|---|
+| 序号 | 与图片保存顺序一致 |
+| 保存文件名 | 例如 `temple_001.jpg`，或保存工具返回的实际文件名 |
+| 重命名标题 | 最终文件名使用的标题；`title.txt` 仅同步导出 |
+| 藏品标题 | 页面显示的作品名 |
+| 藏品 URL | 当前详情页 URL |
+| 图片 URL | DOM、viewer、IIIF 或下载链接中的完整图片 URL；截图兜底时写详情页 URL |
+| 相关证据 | 说明为什么判断它和关键词 `ssu` 相关 |
+| 作者/时代/地点/分类/馆藏号 | 页面有就记录，没有就写“未显示” |
+| 简短说明 | 用中文概括图片内容和相关信息 |
+
+不要手动维护 Markdown 表格格式；只要传入字段即可。该文件会位于 `browseruse_agent_data/temple_photo_info.md`。
+
+## 失败和跳过规则
+
+遇到以下情况必须跳过当前图片或当前详情页，不要卡住：
+
+1. 页面没有可见馆藏图片。
+2. 图片只显示为很小的缩略图，无法打开大图。
+3. 图片保存失败，重试 1 次仍失败。
+4. 同一详情页 URL、同一 manifest URL、同一图片 URL、同一图片内容或断点续跑上下文中列出的任一记录已经处理过。
+5. 页面需要登录、付费或出现人机验证。
+6. 页面明显与关键词 `ssu` 或中国佛教语境无关。
+7. 连续出现 `browser not connected`、`No valid agent focus available`、`target may have detached` 或空白 SPA 页面时，不要继续循环恢复；调用 `done` 报告需要重启浏览器会话，并保留已下载记录。
+
+如果遇到人机验证，不要自动绕过，只在最终结果中报告需要人工处理。
+
+## 明确禁止
+
+- 不要调用 LOC 专用工具：
+  - `collect_loc_result_queue`
+  - `get_next_loc_queue_item`
+  - `mark_loc_queue_item`
+  - `rebuild_loc_download_state`
+  - `select_download_format`
+- 不要调用 Kyohaku 专用工具：
+  - `collect_kyohaku_result_queue`
+  - `get_next_kyohaku_queue_item`
+  - `mark_kyohaku_queue_item`
+  - `download_kyohaku_image`
+  - `download_current_kyohaku_item_images`
+  - `save_kyohaku_image_via_browser`
+  - `clean_kyohaku_screenshot`
+- 不要在已提取到 IIIF / viewer / download image URL 后继续点击下载按钮或反复 scroll；直接调用 `download_image_from_url`。
+- 不要在 IDP 搜索结果页逐个点开 50 个结果；必须先调用 `download_current_idp_search_page_images` 批量处理当前页。
+- 不要因为某页重复或失败就跳到 page 999 / page 5000；只能按进度文件顺序递增页码。
+- 不要手写 IDP 搜索分页 URL；必须使用 `navigate_idp_search_page`。
+- 不要使用 `evaluate(code="自定义工具(...)")` 的写法调用工具。
+- 不要使用 `write_file` 记录标题或信息表。
+- 不要读取或修改 `loc_result_queue.json`。
+- 不要读取或修改 `download_record.jsonl`。
+- 不要访问非官方图片搜索引擎、社交媒体或无关外站。
+- 不要下载 PDF、视频、音频或网页附件。
+- 不要重复下载同一张图。
+- 不要为了达到 n 张而保存无关图片或页面截图。
+
+## 完成标准
+
+不要直接调用内置 `done`。结束任务必须调用 `finish_download_task(target_count=5000, record_filename="image_record.jsonl", title_filename="title.txt")`，它会用程序生成的确定性报告结束任务，避免最终报告出现乱码或占位符。
+
+满足任一条件后，必须先调用 `validate_download_completion(target_count=5000, record_filename="image_record.jsonl", title_filename="title.txt")`：
+
+1. 已成功保存 5000 张与关键词 `ssu` 相关的图片，并完成 `title.txt` 与 `temple_photo_info.md`。
+2. 已处理完所有搜索结果页，但不足 5000 张；报告实际保存数量、跳过原因和未完成原因。
+3. 网站无法访问、数据库不可用或遇到必须人工处理的人机验证。
+
+如果 `validate_download_completion` 显示 `Final download validation: INCOMPLETE` 且 `remaining_records_needed` 大于 0，不要结束任务，继续扫描后续搜索结果并下载新图片。只有校验报告显示 `Final download validation: SUCCESS`，或已经确认所有搜索结果处理完/网站不可继续访问，才调用 `finish_download_task`。
+
+最终输出必须完全来自 `finish_download_task` 返回的英文 ASCII 确定性报告；不要自己估算、不要写“约 50+”“DD+”“4DD error”等占位符或不合法 HTTP 状态码，不要额外扩写分析段落、玩笑、乱码、字母列表或主观总结。
+
+最终报告必须包含：
+
+1. 成功保存图片数量。
+2. 写入 `title.txt` 的标题数量。
+3. `browseruse_agent_data/image_record.jsonl` 和 `browseruse_agent_data/temple_photo_info.md` 是否已写入。
+4. 成功图片列表：序号、藏品标题、详情页 URL、保存文件名。
+5. 跳过列表：关键词或 URL、跳过原因。

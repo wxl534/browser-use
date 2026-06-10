@@ -1,6 +1,7 @@
 """DOM watchdog for browser DOM tree management using CDP."""
 
 import asyncio
+import os
 import time
 from typing import TYPE_CHECKING
 
@@ -252,6 +253,10 @@ class DOMWatchdog(BaseWatchdog):
 		"""
 		from browser_use.browser.views import BrowserStateSummary, PageInfo
 
+		lightweight_dom = os.environ.get('BROWSER_USE_LIGHTWEIGHT_DOM', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+		if os.environ.get('BROWSER_USE_DISABLE_SCREENSHOTS', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
+			event.include_screenshot = False
+
 		self.logger.debug('🔍 DOMWatchdog.on_BrowserStateRequestEvent: STARTING browser state request')
 		page_url = await self.browser_session.get_current_page_url()
 		self.logger.debug(f'🔍 DOMWatchdog.on_BrowserStateRequestEvent: Got page URL: {page_url}')
@@ -265,7 +270,7 @@ class DOMWatchdog(BaseWatchdog):
 
 		# Check for pending network requests BEFORE waiting (so we can see what's loading)
 		pending_requests_before_wait = []
-		if not not_a_meaningful_website:
+		if not not_a_meaningful_website and not lightweight_dom:
 			try:
 				pending_requests_before_wait = await self._get_pending_network_requests()
 				if pending_requests_before_wait:
@@ -386,17 +391,26 @@ class DOMWatchdog(BaseWatchdog):
 
 			if dom_task:
 				try:
-					content = await dom_task
+					if lightweight_dom:
+						content = await asyncio.wait_for(dom_task, timeout=8.0)
+					else:
+						content = await dom_task
 					self.logger.debug('🔍 DOMWatchdog.on_BrowserStateRequestEvent: ✅ DOM tree build completed')
 				except Exception as e:
 					self.logger.warning(f'🔍 DOMWatchdog.on_BrowserStateRequestEvent: DOM build failed: {e}, using minimal state')
-					content = SerializedDOMState(_root=None, selector_map={})
+					if lightweight_dom and self.browser_session._cached_browser_state_summary:
+						content = self.browser_session._cached_browser_state_summary.dom_state
+					else:
+						content = SerializedDOMState(_root=None, selector_map={})
 			else:
 				content = SerializedDOMState(_root=None, selector_map={})
 
 			if screenshot_task:
 				try:
-					screenshot_b64 = await screenshot_task
+					if lightweight_dom:
+						screenshot_b64 = await asyncio.wait_for(screenshot_task, timeout=3.0)
+					else:
+						screenshot_b64 = await screenshot_task
 					self.logger.debug('🔍 DOMWatchdog.on_BrowserStateRequestEvent: ✅ Clean screenshot captured')
 				except Exception as e:
 					self.logger.warning(f'🔍 DOMWatchdog.on_BrowserStateRequestEvent: Clean screenshot failed: {e}')

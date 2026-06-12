@@ -25,7 +25,7 @@ import anyio
 from pydantic import BaseModel, Field
 
 from browser_use import ActionResult, Tools
-from idp_page_progress import mark_page_batch_result
+from idp_page_progress import load_page_progress, mark_page_batch_result
 
 # 使用脚本所在目录作为项目基准路径；运行产物目录可由 main.py 动态配置
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -3489,6 +3489,77 @@ def _current_idp_search_page_from_url(url: str) -> tuple[str, int, int]:
     return keyword or 'china temple', page, limit
 
 
+async def _current_browser_url(browser_session) -> str:
+    js_code = 'window.location.href'
+    cdp_session = await browser_session.get_or_create_cdp_session()
+    result = await cdp_session.cdp_client.send.Runtime.evaluate(
+        params={'expression': js_code, 'returnByValue': True, 'awaitPromise': False},
+        session_id=cdp_session.session_id,
+    )
+    if result.get('exceptionDetails'):
+        return ''
+    return str(result.get('result', {}).get('value') or '')
+
+
+def _idp_page_progress_state(page: int) -> dict | None:
+    progress = load_page_progress(AGENT_DATA_DIR)
+    for item in progress.get('pages') or []:
+        try:
+            if int(item.get('page')) == page:
+                return item if isinstance(item, dict) else None
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _effective_idp_start_index(requested_start_index: int, page: int) -> tuple[int, str]:
+    """
+    Do not let an agent-provided start_index=0 move a page backwards after
+    idp_page_progress.json has already advanced it.
+    """
+    try:
+        requested = max(0, int(requested_start_index))
+    except (TypeError, ValueError):
+        requested = 0
+    state = _idp_page_progress_state(page)
+    if not state:
+        return requested, ''
+    try:
+        progress_index = max(0, int(state.get('next_index') or 0))
+    except (TypeError, ValueError):
+        progress_index = 0
+    effective = max(requested, progress_index)
+    if effective != requested:
+        return effective, f'已根据 idp_page_progress.json 将 start_index 从 {requested} 提升到 {effective}'
+    return effective, ''
+
+
+def _idp_batch_item_cap(requested_max_items: int) -> int:
+    raw_value = os.environ.get('BROWSER_USE_IDP_BATCH_ITEM_CAP', '').strip()
+    if not raw_value:
+        return requested_max_items
+    try:
+        return min(100, max(1, int(raw_value)))
+    except ValueError:
+        return requested_max_items
+
+
+def _record_idp_empty_page_event(page_url: str, page: int, start_index: int, total_found: int, note: str) -> Path:
+    event_file = AGENT_DATA_DIR / 'idp_empty_page_events.jsonl'
+    event_file.parent.mkdir(parents=True, exist_ok=True)
+    event = {
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'page_url': page_url,
+        'page': page,
+        'start_index': start_index,
+        'total_found': total_found,
+        'note': note,
+    }
+    with open(event_file, 'a', encoding='utf-8') as file:
+        file.write(json_module.dumps(event, ensure_ascii=False) + '\n')
+    return event_file
+
+
 async def _extract_current_idp_search_items(browser_session, max_items: int, start_index: int) -> dict:
     js_code = '''
     (function() {
@@ -3528,6 +3599,9 @@ async def _extract_current_idp_search_items(browser_session, max_items: int, sta
                 page_url: window.location.href,
                 page_title: document.title,
                 total_found: items.length,
+                body_text_length: (document.body && document.body.innerText || '').trim().length,
+                anchor_count: document.querySelectorAll('a').length,
+                collection_link_count: document.querySelectorAll('a[href*="/collection/"]').length,
                 items: items.slice(''' + json_module.dumps(start_index) + ''', ''' + json_module.dumps(start_index + max_items) + '''),
             };
         } catch (error) {
@@ -3665,9 +3739,60 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
             return ActionResult(extracted_content='✅ 已达到目标数量，无需继续下载。\n' + report, include_in_memory=True)
 
         allowed_host_suffixes = _sanitize_allowed_host_suffixes(params.allowed_host_suffixes)
-        max_items = min(params.max_items, max(1, remaining))
-        page_data = await _extract_current_idp_search_items(browser_session, max_items=max_items, start_index=params.start_index)
+        requested_max_items = min(params.max_items, max(1, remaining))
+        batch_item_cap = _idp_batch_item_cap(requested_max_items)
+        max_items = min(requested_max_items, batch_item_cap)
+        current_url = await _current_browser_url(browser_session)
+        _, current_page_from_url, _ = _current_idp_search_page_from_url(current_url)
+        effective_start_index, start_index_note = _effective_idp_start_index(params.start_index, current_page_from_url)
+        page_data = await _extract_current_idp_search_items(
+            browser_session,
+            max_items=max_items,
+            start_index=effective_start_index,
+        )
         items = page_data.get('items') or []
+        if not items:
+            page_url_for_retry = str(page_data.get('page_url') or current_url)
+            keyword_for_retry, page_for_retry, limit_for_retry = _current_idp_search_page_from_url(page_url_for_retry)
+            if 'idp.bl.uk/collection/' in page_url_for_retry or 'idp.bl.uk/collection?' in page_url_for_retry:
+                await _navigate_to_image_url(browser_session, page_url_for_retry)
+                await asyncio.sleep(3)
+                page_data = await _extract_current_idp_search_items(
+                    browser_session,
+                    max_items=max_items,
+                    start_index=effective_start_index,
+                )
+                items = page_data.get('items') or []
+            if not items:
+                event_file = _record_idp_empty_page_event(
+                    str(page_data.get('page_url') or page_url_for_retry),
+                    page_for_retry,
+                    effective_start_index,
+                    int(page_data.get('total_found') or 0),
+                    'no_collection_items_after_reload',
+                )
+                _write_idp_progress({
+                    **_load_idp_progress(),
+                    'keyword': keyword_for_retry,
+                    'current_page': page_for_retry,
+                    'next_page': page_for_retry,
+                    'next_index': effective_start_index,
+                    'limit': limit_for_retry,
+                    'last_error': 'empty_idp_search_page_after_reload',
+                    'empty_page_events_file': str(event_file),
+                    'updated_at': datetime.now(timezone.utc).isoformat(),
+                })
+                return ActionResult(
+                    error=(
+                        '当前 IDP 搜索页未提取到 /collection/ 结果，刷新后仍为空；'
+                        '这通常是 IDP SPA 初始化失败或浏览器会话变脏。'
+                        f' page={page_for_retry}, start_index={effective_start_index}, '
+                        f'body_text_length={page_data.get("body_text_length")}, '
+                        f'anchor_count={page_data.get("anchor_count")}, '
+                        f'collection_link_count={page_data.get("collection_link_count")}. '
+                        '请重启浏览器会话后从 idp_page_progress.json 续跑。'
+                    )
+                )
         if not items:
             return ActionResult(error='当前页面未提取到 IDP /collection/ 搜索结果；请先调用 navigate_idp_search_page 打开搜索结果页。')
         keyword, current_page, page_limit = _current_idp_search_page_from_url(str(page_data.get('page_url') or ''))
@@ -3783,7 +3908,7 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
         report_file = AGENT_DATA_DIR / 'final_download_report.md'
         report_file.write_text(report + '\n', encoding='utf-8')
         total_found = int(page_data.get('total_found') or 0)
-        next_index = params.start_index + processed_items
+        next_index = effective_start_index + processed_items
         next_page = current_page
         if next_index >= total_found:
             next_page = current_page + 1
@@ -3796,7 +3921,7 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
             keyword=keyword,
             target_count=params.target_count,
             page=current_page,
-            start_index=params.start_index,
+            start_index=effective_start_index,
             processed_items=processed_items,
             downloaded_count=len(downloaded),
             skipped_count=len(skipped),
@@ -3832,6 +3957,10 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
             f'- 进度文件: {progress_file}\n'
             f'- 下次建议: page={active_page["page"]}, start_index={active_page["next_index"]}\n'
         )
+        if requested_max_items != max_items:
+            msg += f'- 批量上限: agent 请求 max_items={requested_max_items}，已按 BROWSER_USE_IDP_BATCH_ITEM_CAP 限制为 {max_items}\n'
+        if start_index_note:
+            msg += f'- start_index 修正: {start_index_note}\n'
         if downloaded:
             msg += '- downloaded_first_20:\n' + '\n'.join(f'  - {line}' for line in downloaded[:20]) + '\n'
         if skipped:

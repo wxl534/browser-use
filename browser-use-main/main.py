@@ -498,12 +498,17 @@ def sync_idp_progress_from_page_queue(run_dir: Path, target_image_count: int, se
         fallback_page = max(1, int(legacy_progress.get('next_page') or legacy_progress.get('current_page') or 1))
     except (TypeError, ValueError):
         fallback_page = 1
+    max_page_text = os.environ.get('BROWSER_USE_IDP_MAX_REASONABLE_PAGE', '').strip()
+    try:
+        max_reasonable_page = max(1, int(max_page_text)) if max_page_text else max(fallback_page, (target_image_count // 25) + 20)
+    except ValueError:
+        max_reasonable_page = max(fallback_page, (target_image_count // 25) + 20)
     active = select_next_page(
         run_dir,
         keyword=search_keyword,
         target_count=target_image_count,
         fallback_page=fallback_page,
-        max_reasonable_page=max(200, (target_image_count // 25) + 20),
+        max_reasonable_page=max_reasonable_page,
     )
     progress = {
         **legacy_progress,
@@ -560,15 +565,6 @@ def build_resume_task_context(base_dir: Path, target_image_count: int, search_ke
         suggested_start_index = 0
     title_prefix = keyword_title_prefix(search_keyword)
     last_record = records[-1]
-    listed_records = records[-120:]
-    listed_lines = [
-        (
-            f"- #{sequence_of(record):03d} | {record.get('file_name', '')} | "
-            f"{record.get('collection_title') or record.get('title') or 'untitled'} | "
-            f"{record.get('page_url', '')} | {record.get('image_url', '')}"
-        )
-        for record in listed_records
-    ]
 
     return (
         "\n\n## 断点续跑上下文\n\n"
@@ -594,12 +590,9 @@ def build_resume_task_context(base_dir: Path, target_image_count: int, search_ke
         f"页面 `{last_record.get('page_url', '')}`\n\n"
         "续跑规则：\n"
         "1. 不要清空 image 目录、title.txt、image_record.jsonl 或 temple_photo_info.md。\n"
-        "2. 必须把下面列出的详情页 URL、manifest URL、图片 URL 都视为已处理；搜索结果中如果再次遇到这些记录，直接跳过，不要调用下载。\n"
+        "2. 重复判断由下载工具基于 image_record.jsonl 内存索引执行；不要要求自己记忆历史 URL，也不要回头重扫旧页。\n"
         "3. 如果误点到已处理详情页，调用工具后返回“图片 URL 已有下载记录”或“详情页已处理”时，视为成功跳过并继续下一条。\n"
-        f"4. 第一次保存新图片时传入 sequence={next_sequence}，之后按安全序号递增；如果工具自动修正序号，以工具返回为准；目标以有效记录数量为准，不以文件夹文件数或最大序号为准。\n\n"
-        f"已下载记录清单（共列出 {len(listed_records)} 条，用于避开重复）：\n"
-        + "\n".join(listed_lines)
-        + "\n"
+        f"4. 第一次保存新图片时传入 sequence={next_sequence}，之后按安全序号递增；如果工具自动修正序号，以工具返回为准；目标以有效记录数量为准，不以文件夹文件数或最大序号为准。\n"
     )
 
 
@@ -636,7 +629,6 @@ async def run_idp_resume_preflight(
             images_per_item=1,
             file_prefix='temple',
             title_prefix=keyword_title_prefix(search_keyword),
-            allowed_host_suffixes=['idp.bl.uk', 'data.idp.bl.uk', 'bl.uk'],
             record_filename='image_record.jsonl',
             info_filename='temple_photo_info.md',
         ),

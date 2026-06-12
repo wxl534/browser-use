@@ -15,6 +15,7 @@ import ipaddress
 import json as json_module
 import os
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
@@ -47,6 +48,43 @@ KYOHAKU_METHODS = ('python_direct', 'browser_context_fetch', 'clean_screenshot')
 KYOHAKU_STRATEGY_LOCK_THRESHOLD = 5
 GENERAL_IMAGE_METHODS = ('python_direct', 'browser_context_fetch', 'clean_screenshot')
 GENERAL_IMAGE_STRATEGY_LOCK_THRESHOLD = 5
+
+
+@dataclass
+class DownloadRecordIndex:
+    """In-memory indexes for one batch run, avoiding repeated JSONL scans."""
+
+    record_file: Path
+    records: list[dict] = field(default_factory=list)
+    downloaded_count: int = 0
+    max_sequence: int = 0
+    used_sequences: set[int] = field(default_factory=set)
+    records_by_image_url: dict[str, dict] = field(default_factory=dict)
+    records_by_file_hash: dict[str, dict] = field(default_factory=dict)
+    records_by_source_hash: dict[str, dict] = field(default_factory=dict)
+
+    def add_record(self, record: dict) -> None:
+        self.records.append(record)
+        if record.get('status') != 'downloaded':
+            return
+
+        self.downloaded_count += 1
+        sequence = _record_sequence(record)
+        if sequence is not None:
+            self.used_sequences.add(sequence)
+            self.max_sequence = max(self.max_sequence, sequence)
+
+        image_url = str(record.get('image_url') or '').strip()
+        if image_url:
+            self.records_by_image_url[image_url] = record
+
+        file_hash = _record_file_sha256(record)
+        if file_hash:
+            self.records_by_file_hash[file_hash] = record
+
+        source_hash = str(record.get('source_hash') or '').strip()
+        if source_hash:
+            self.records_by_source_hash[source_hash] = record
 
 
 # === 定义参数模型 ===
@@ -1252,6 +1290,206 @@ def _find_existing_image_file_by_hash(file_hash: str, exclude_path: Path | None 
         except OSError:
             continue
     return None
+
+
+def _build_download_record_index(record_filename: str = 'image_record.jsonl') -> DownloadRecordIndex:
+    """
+    Load image_record.jsonl once and build O(1) lookup indexes for a batch.
+    """
+    record_file = _image_record_file(record_filename)
+    index = DownloadRecordIndex(record_file=record_file)
+    for record in _load_image_records(record_file):
+        index.add_record(record)
+    return index
+
+
+def _build_existing_image_hash_index() -> dict[str, Path]:
+    """
+    Scan IMAGE_DIR once per batch so duplicate orphan files do not require
+    re-hashing the whole directory for every new image.
+    """
+    existing: dict[str, Path] = {}
+    if not IMAGE_DIR.exists():
+        return existing
+    for image_path in sorted(IMAGE_DIR.iterdir(), key=lambda path: path.name.lower()):
+        if not image_path.is_file() or image_path.name == 'rename_record.txt':
+            continue
+        if normalize_image_ext(image_path.suffix, fallback='') not in EXT_TO_PIL_FORMAT:
+            continue
+        try:
+            existing.setdefault(_sha256_file(image_path), image_path)
+        except OSError:
+            continue
+    return existing
+
+
+def _append_image_record(record_file: Path, record: dict) -> None:
+    record_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(record_file, 'a', encoding='utf-8') as file:
+        file.write(json_module.dumps(record, ensure_ascii=False) + '\n')
+
+
+def _append_image_info_record(data_dir: Path, record: dict, info_filename: str) -> Path:
+    info_file = data_dir / _safe_agent_data_filename(info_filename, 'temple_photo_info.md')
+    info_file.parent.mkdir(parents=True, exist_ok=True)
+    needs_header = not info_file.exists() or info_file.stat().st_size == 0
+    with open(info_file, 'a', encoding='utf-8') as file:
+        if needs_header:
+            file.write(
+                '# 图片下载记录\n\n'
+                '| 序号 | 保存文件名 | 重命名标题 | 藏品标题 | 藏品 URL | 图片 URL | 相关证据 | 作者/时代/分类/馆藏号 | 简短说明 |\n'
+                '|---|---|---|---|---|---|---|---|---|\n'
+            )
+        file.write(
+            '| '
+            + ' | '.join(
+                [
+                    _markdown_cell(record.get('sequence')),
+                    _markdown_cell(record.get('file_name')),
+                    _markdown_cell(record.get('title')),
+                    _markdown_cell(record.get('collection_title')),
+                    _markdown_cell(record.get('page_url')),
+                    _markdown_cell(record.get('image_url')),
+                    _markdown_cell(record.get('evidence')),
+                    _markdown_cell(record.get('metadata')),
+                    _markdown_cell(record.get('summary')),
+                ]
+            )
+            + ' |\n'
+        )
+    return info_file
+
+
+def _append_image_title_record(data_dir: Path, record: dict) -> Path:
+    title = _normalize_title(str(record.get('title') or record.get('collection_title') or record.get('file_name') or 'untitled'))
+    return _append_download_title(title, data_dir / 'title.txt')
+
+
+async def _record_saved_image_fast(
+    *,
+    image_path: Path,
+    sequence: int,
+    title: str,
+    collection_title: str,
+    page_url: str,
+    image_url: str,
+    evidence: str,
+    metadata: str,
+    summary: str,
+    record_filename: str,
+    info_filename: str,
+    record_index: DownloadRecordIndex,
+    existing_image_hashes: dict[str, Path],
+) -> ActionResult:
+    """
+    Fast batch-only record path: uses in-memory indexes and append-only writes.
+    It intentionally avoids record_downloaded_image(), which reloads JSONL and
+    rescans IMAGE_DIR on every call.
+    """
+    try:
+        data_dir = AGENT_DATA_DIR
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        if not image_path.exists() or not image_path.is_file():
+            return ActionResult(error=f'图片文件不存在，不能记录: {image_path}')
+        try:
+            _validate_saved_image_file(image_path, source='record_saved_image_fast')
+        except RuntimeError as exc:
+            return ActionResult(error=f'图片质量校验失败，拒绝记录: {exc}')
+
+        if sequence in record_index.used_sequences:
+            return ActionResult(error=f'序号 #{sequence} 已有记录，拒绝覆盖旧记录')
+
+        file_hash = _sha256_file(image_path)
+        existing_content_record = record_index.records_by_file_hash.get(file_hash)
+        if existing_content_record:
+            image_path.unlink(missing_ok=True)
+            return ActionResult(
+                extracted_content=(
+                    f'✅ 图片内容已有下载记录，已删除本次重复文件并跳过\n'
+                    f'- 已有序号: {existing_content_record.get("sequence")}\n'
+                    f'- 已有文件: {existing_content_record.get("file_name", "")}\n'
+                    f'- SHA256: {file_hash}'
+                ),
+                include_in_memory=True,
+                long_term_memory=f'图片内容已记录，跳过重复记录: {existing_content_record.get("file_name", "")}',
+            )
+
+        existing_image_path = existing_image_hashes.get(file_hash)
+        if existing_image_path and existing_image_path.resolve() != image_path.resolve():
+            image_path.unlink(missing_ok=True)
+            return ActionResult(
+                extracted_content=(
+                    f'✅ image 目录中已存在相同图片内容，已删除本次重复文件并跳过\n'
+                    f'- 已有文件: {existing_image_path.name}\n'
+                    f'- SHA256: {file_hash}'
+                ),
+                include_in_memory=True,
+                long_term_memory=f'image 目录已有相同图片，跳过重复记录: {existing_image_path.name}',
+            )
+
+        normalized_title = _normalize_title(title, fallback=image_path.stem)
+        source_hash = _source_hash(page_url, image_url, 0)
+        if source_hash and source_hash in record_index.records_by_source_hash:
+            image_path.unlink(missing_ok=True)
+            existing_record = record_index.records_by_source_hash[source_hash]
+            return ActionResult(
+                extracted_content=(
+                    f'✅ 来源已处理，已删除本次重复文件并跳过\n'
+                    f'- 已有序号: {existing_record.get("sequence")}\n'
+                    f'- source_hash: {source_hash}'
+                ),
+                include_in_memory=True,
+                long_term_memory=f'来源已记录，跳过重复记录: {existing_record.get("file_name", "")}',
+            )
+
+        image_path = _rename_image_to_final_name(image_path, normalized_title, sequence, file_hash)
+        final_file_hash = _sha256_file(image_path)
+        if final_file_hash != file_hash:
+            raise RuntimeError(f'最终命名后图片 hash 变化: before={file_hash}, after={final_file_hash}')
+
+        record = {
+            'status': 'downloaded',
+            'sequence': sequence,
+            'file_name': image_path.name,
+            'file_path': str(image_path),
+            'file_size': image_path.stat().st_size,
+            'sha256': file_hash,
+            'content_hash': file_hash,
+            'short_hash': file_hash[:8],
+            'source_hash': source_hash,
+            'source_item_id': _source_item_id_from_urls(page_url, image_url),
+            'title_hash': _hash_text(normalized_title, 'sha1'),
+            'title': normalized_title,
+            'collection_title': _normalize_title(collection_title, fallback=title),
+            'page_url': page_url.strip(),
+            'image_url': image_url.strip(),
+            'evidence': evidence.strip(),
+            'metadata': metadata.strip(),
+            'summary': summary.strip(),
+            'recorded_at': datetime.now(timezone.utc).isoformat(),
+        }
+        _append_image_record(record_index.record_file, record)
+        record_index.add_record(record)
+        existing_image_hashes[file_hash] = image_path
+        title_file = _append_image_title_record(data_dir, record)
+        info_file = _append_image_info_record(data_dir, record, info_filename)
+
+        return ActionResult(
+            extracted_content=(
+                f'✅ 已快速记录图片 #{sequence}: {image_path.name}\n'
+                f'- content_hash: {file_hash}\n'
+                f'- source_hash: {source_hash}\n'
+                f'- 当前有效记录: {record_index.downloaded_count}\n'
+                f'- 标题文件: {title_file}\n'
+                f'- 信息表: {info_file}\n'
+                f'- 结构化记录: {record_index.record_file}'
+            ),
+            include_in_memory=True,
+            long_term_memory=f'已快速记录图片 #{sequence}: {image_path.name}，当前共 {record_index.downloaded_count} 条有效记录',
+        )
+    except Exception as e:
+        return ActionResult(error=f'快速记录图片时出错: {str(e)}')
 
 
 def _image_suffix_from_url(url: str) -> str:
@@ -3034,6 +3272,9 @@ def validate_download_artifacts(
     target_count: int = 100,
     record_filename: str = 'image_record.jsonl',
     title_filename: str = 'title.txt',
+    *,
+    validate_image_files: bool = True,
+    include_duplicate_hash_groups: bool = True,
 ) -> dict:
     data_dir = AGENT_DATA_DIR
     record_file = data_dir / _safe_agent_data_filename(record_filename, 'image_record.jsonl')
@@ -3061,20 +3302,21 @@ def validate_download_artifacts(
         if title:
             for ext in EXT_TO_PIL_FORMAT:
                 record_file_names.add(f'{title}{ext}')
-    for image_path in image_files:
-        try:
-            _validate_saved_image_file(image_path, source='final_validation')
-        except RuntimeError as exc:
-            bad_files.append({'file': image_path.name, 'error': str(exc)})
+    if validate_image_files:
+        for image_path in image_files:
+            try:
+                _validate_saved_image_file(image_path, source='final_validation')
+            except RuntimeError as exc:
+                bad_files.append({'file': image_path.name, 'error': str(exc)})
 
     orphan_files = sorted(path.name for path in image_files if path.name not in record_file_names)
-    duplicate_hash_groups = _image_hash_groups()
+    duplicate_hash_groups = _image_hash_groups() if include_duplicate_hash_groups else []
     complete = (
         len(records) >= target_count
         and title_count >= target_count
         and len(image_files) >= target_count
-        and not bad_files
-        and not duplicate_hash_groups
+        and (not validate_image_files or not bad_files)
+        and (not include_duplicate_hash_groups or not duplicate_hash_groups)
     )
     remaining_records = max(0, target_count - len(records))
     return {
@@ -3088,6 +3330,8 @@ def validate_download_artifacts(
         'bad_files': bad_files,
         'orphan_files': orphan_files,
         'duplicate_hash_groups': duplicate_hash_groups,
+        'validate_image_files': validate_image_files,
+        'include_duplicate_hash_groups': include_duplicate_hash_groups,
         'record_file': str(record_file),
         'title_file': str(title_file),
     }
@@ -3105,6 +3349,8 @@ def format_download_validation_report(validation: dict) -> str:
         f"- sequence_gaps_warning_only: {validation.get('missing_sequences') or 'none'}",
         f"- bad_or_empty_images: {len(validation.get('bad_files') or [])}",
         f"- duplicate_image_hash_groups: {len(validation.get('duplicate_hash_groups') or [])}",
+        f"- image_file_validation: {'enabled' if validation.get('validate_image_files') else 'skipped_for_batch'}",
+        f"- duplicate_hash_scan: {'enabled' if validation.get('include_duplicate_hash_groups') else 'skipped_for_batch'}",
         f"- orphan_files_warning_only: {len(validation.get('orphan_files') or [])}",
         f"- record_file: {validation.get('record_file')}",
         f"- title_file: {validation.get('title_file')}",
@@ -3126,6 +3372,8 @@ async def validate_download_completion(params: ValidateDownloadCompletionParams)
         target_count=params.target_count,
         record_filename=params.record_filename,
         title_filename=params.title_filename,
+        validate_image_files=True,
+        include_duplicate_hash_groups=True,
     )
     report = format_download_validation_report(validation)
     report_file = AGENT_DATA_DIR / 'final_download_report.md'
@@ -3153,6 +3401,8 @@ async def finish_download_task(params: FinishDownloadTaskParams):
         target_count=params.target_count,
         record_filename=params.record_filename,
         title_filename=params.title_filename,
+        validate_image_files=True,
+        include_duplicate_hash_groups=True,
     )
     report = format_download_validation_report(validation)
     report_file = AGENT_DATA_DIR / 'final_download_report.md'
@@ -3403,8 +3653,10 @@ async def _fetch_idp_manifest_summary_in_browser(browser_session, manifest_url: 
 )
 async def download_current_idp_search_page_images(params: DownloadCurrentIdpSearchPageImagesParams, browser_session):
     try:
-        records_before = _read_downloaded_records(params.record_filename)
-        remaining = max(0, params.target_count - len(records_before))
+        record_index = _build_download_record_index(params.record_filename)
+        existing_image_hashes = _build_existing_image_hash_index()
+        next_sequence = max(record_index.max_sequence, _max_image_file_sequence(params.file_prefix)) + 1
+        remaining = max(0, params.target_count - record_index.downloaded_count)
         if remaining == 0:
             report = format_download_validation_report(validate_download_artifacts(
                 target_count=params.target_count,
@@ -3427,7 +3679,7 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
 
         async with DOWNLOAD_LOCK:
             for item in items:
-                if len(_read_downloaded_records(params.record_filename)) >= params.target_count:
+                if record_index.downloaded_count >= params.target_count:
                     break
                 processed_items += 1
                 manifest_url = str(item.get('manifest_url') or '')
@@ -3452,14 +3704,16 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
                 for image_url in image_urls:
                     if saved_for_item >= params.images_per_item:
                         break
-                    if len(_read_downloaded_records(params.record_filename)) >= params.target_count:
+                    if record_index.downloaded_count >= params.target_count:
                         break
-                    existing_record = _find_downloaded_record_by_image_url(params.record_filename, image_url)
+                    existing_record = record_index.records_by_image_url.get(image_url)
                     if existing_record:
                         skipped.append(f'{page_url}: 图片 URL 已记录 #{existing_record.get("sequence")}')
                         continue
 
-                    sequence = _next_available_image_sequence(params.record_filename, params.file_prefix)
+                    while next_sequence in record_index.used_sequences:
+                        next_sequence += 1
+                    sequence = next_sequence
                     file_name = f'{params.file_prefix}_{sequence:03d}'
                     label = _normalize_title(str(manifest.get('label') or item.get('title') or item.get('id') or 'IDP item'))
                     title = _normalize_title(f'{params.title_prefix}_{sequence:03d}_{label}')
@@ -3478,43 +3732,53 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
                             image_path = await _browser_fetch_image_to_file(browser_session, image_url, file_name)
                             download_method = f'browser_context_fetch_after_python_error:{direct_exc}'
                         file_hash = _sha256_file(image_path)
-                        existing_content_record = _find_downloaded_record_by_file_hash(params.record_filename, file_hash)
+                        existing_content_record = record_index.records_by_file_hash.get(file_hash)
                         if existing_content_record:
                             image_path.unlink(missing_ok=True)
                             skipped.append(f'{page_url}: 图片内容已记录 #{existing_content_record.get("sequence")}')
                             continue
 
-                        existing_image_path = _find_existing_image_file_by_hash(file_hash, exclude_path=image_path)
-                        if existing_image_path:
+                        existing_image_path = existing_image_hashes.get(file_hash)
+                        if existing_image_path and existing_image_path.resolve() != image_path.resolve():
                             image_path.unlink(missing_ok=True)
                             skipped.append(f'{page_url}: image 目录已有相同图片 {existing_image_path.name}')
                             continue
 
-                        record_result = await _record_saved_kyohaku_image(
+                        evidence_keyword = keyword or params.title_prefix or 'IDP'
+                        record_result = await _record_saved_image_fast(
                             image_path=image_path,
                             sequence=sequence,
                             title=title,
                             collection_title=label,
                             page_url=page_url,
                             image_url=image_url,
-                            evidence='IDP search result for china temple; image URL resolved from official IIIF manifest.',
+                            evidence=f'IDP search result for {evidence_keyword}; image URL resolved from official IIIF manifest.',
                             metadata=str(manifest.get('metadata') or '').strip() or '未显示',
                             summary=str(manifest.get('summary') or label or 'IDP official collection image').strip(),
                             record_filename=params.record_filename,
                             info_filename=params.info_filename,
+                            record_index=record_index,
+                            existing_image_hashes=existing_image_hashes,
                         )
                         if record_result.error:
                             image_path.unlink(missing_ok=True)
                             errors.append(f'{page_url}: 记录失败: {record_result.error}')
                             continue
                         _record_generic_image_method_success(download_method.split(':', 1)[0], sequence, image_url)
-                        downloaded.append(f'#{sequence}: {image_path.name} | {label} | {page_url} | {download_method}')
+                        recorded_file_name = str((record_index.records_by_image_url.get(image_url) or {}).get('file_name') or image_path.name)
+                        downloaded.append(f'#{sequence}: {recorded_file_name} | {label} | {page_url} | {download_method}')
+                        next_sequence = max(next_sequence + 1, record_index.max_sequence + 1)
                         saved_for_item += 1
                     except Exception as exc:
                         _record_generic_image_method_failure('browser_context_fetch', sequence, image_url, str(exc))
                         errors.append(f'{page_url}: 图片下载失败: {exc}')
 
-        validation = validate_download_artifacts(target_count=params.target_count, record_filename=params.record_filename)
+        validation = validate_download_artifacts(
+            target_count=params.target_count,
+            record_filename=params.record_filename,
+            validate_image_files=False,
+            include_duplicate_hash_groups=False,
+        )
         report = format_download_validation_report(validation)
         report_file = AGENT_DATA_DIR / 'final_download_report.md'
         report_file.write_text(report + '\n', encoding='utf-8')

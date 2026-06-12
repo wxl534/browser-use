@@ -14,12 +14,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from browser_use import Agent, Browser, ChatOpenAI
+from idp_page_progress import select_next_page
 
 # 从独立的工具注册模块导入
 from tools_registry import (
+    DownloadCurrentIdpSearchPageImagesParams,
+    NavigateIdpSearchPageParams,
     RebuildLocDownloadStateParams,
     configure_runtime_paths,
+    download_current_idp_search_page_images,
     format_download_validation_report,
+    navigate_idp_search_page,
     rebuild_loc_download_state,
     tools,
     validate_download_artifacts,
@@ -483,6 +488,38 @@ def load_idp_progress(base_dir: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def sync_idp_progress_from_page_queue(run_dir: Path, target_image_count: int, search_keyword: str) -> dict:
+    """
+    使用 idp_page_progress.json 选择续跑页，并同步导出到 idp_progress.json。
+    image_record.jsonl 仍是图片级事实来源；idp_page_progress.json 是页级事实来源。
+    """
+    legacy_progress = load_idp_progress(run_dir)
+    try:
+        fallback_page = max(1, int(legacy_progress.get('next_page') or legacy_progress.get('current_page') or 1))
+    except (TypeError, ValueError):
+        fallback_page = 1
+    active = select_next_page(
+        run_dir,
+        keyword=search_keyword,
+        target_count=target_image_count,
+        fallback_page=fallback_page,
+        max_reasonable_page=max(200, (target_image_count // 25) + 20),
+    )
+    progress = {
+        **legacy_progress,
+        'keyword': search_keyword,
+        'target_count': target_image_count,
+        'current_page': active['page'],
+        'next_page': active['page'],
+        'next_index': active['next_index'],
+        'source': 'synced_from_idp_page_progress',
+        'page_progress_file': str(run_dir / 'idp_page_progress.json'),
+        'updated_at': datetime.now().isoformat(),
+    }
+    (run_dir / 'idp_progress.json').write_text(json.dumps(progress, ensure_ascii=False, indent=2), encoding='utf-8')
+    return active
+
+
 def build_resume_task_context(base_dir: Path, target_image_count: int, search_keyword: str = 'china buddhist') -> str:
     """
     根据 browseruse_agent_data/image_record.jsonl 生成断点续跑说明，附加到 task 给 agent。
@@ -544,16 +581,11 @@ def build_resume_task_context(base_dir: Path, target_image_count: int, search_ke
         f"- 已使用最大序号：{max_sequence}\n"
         f"- 下一张新图片必须从序号：{next_sequence} 开始，例如 `temple_{next_sequence:03d}` / "
         f"`{title_prefix}_{next_sequence:03d}_...`\n"
-        f"- 恢复后不要从搜索结果第 1 页重新扫描；优先调用 "
+        f"- 程序已在 Agent 启动前按页级进度预执行第一批动作；Agent 接手后必须从最新 `idp_progress.json` 继续。\n"
+        f"- 恢复后不要从搜索结果第 1 页重新扫描；如需继续批量处理，使用 "
         f"`navigate_idp_search_page(keyword=\"{search_keyword}\", page={suggested_page}, limit=50)` "
-        f"并从该页附近继续向后处理。\n"
-        f"- 本次启动后的第一组动作必须是：先调用 "
-        f"`navigate_idp_search_page(keyword=\"{search_keyword}\", page={suggested_page}, limit=50)`，"
-        f"然后立即调用 `download_current_idp_search_page_images(target_count={target_image_count}, "
-        f"max_items=50, start_index={suggested_start_index}, images_per_item=1, file_prefix=\"temple\", "
-        f"title_prefix=\"{title_prefix}\", record_filename=\"image_record.jsonl\", "
-        "info_filename=\"temple_photo_info.md\")`；不要先访问首页，不要从 page=1 重新处理。\n"
-        f"- 必须按 `idp_progress.json` 的 page={suggested_page} 开始顺序递增；不要自行跳到 page 999、page 5000 或其他极深页。\n"
+        f"和 `download_current_idp_search_page_images(..., start_index={suggested_start_index}, ...)`。\n"
+        f"- 必须按 `idp_page_progress.json` 同步导出的 page={suggested_page} 顺序递增；不要自行跳到 page 999、page 5000 或其他极深页。\n"
         "- 如果当前页批量工具 0 新增或失败，改为下一页继续批量处理；不要退化为逐个点击详情页。\n"
         f"- 按有效记录数距离目标 {target_image_count} 还需要继续处理：{remaining_by_count} 张；"
         f"不要因为最大序号达到目标就提前结束，也不要回头补齐旧序号空洞\n"
@@ -569,6 +601,52 @@ def build_resume_task_context(base_dir: Path, target_image_count: int, search_ke
         + "\n".join(listed_lines)
         + "\n"
     )
+
+
+async def run_idp_resume_preflight(
+    *,
+    browser: Browser,
+    run_dir: Path,
+    target_image_count: int,
+    search_keyword: str,
+) -> None:
+    """
+    断点续跑时由代码先完成第一组确定性动作，避免依赖 Agent 记住 prompt。
+    """
+    active = sync_idp_progress_from_page_queue(run_dir, target_image_count, search_keyword)
+    page = int(active.get('page') or 1)
+    start_index = int(active.get('next_index') or 0)
+    print(f"\n♻️ 代码预执行断点首批动作：page={page}, start_index={start_index}")
+
+    navigate_result = await navigate_idp_search_page(
+        params=NavigateIdpSearchPageParams(keyword=search_keyword, page=page, limit=50),
+        browser_session=browser,
+    )
+    if navigate_result.error:
+        print(f"⚠️ 断点预导航失败，交给 Agent 处理：{navigate_result.error}")
+        return
+    if navigate_result.extracted_content:
+        print(navigate_result.extracted_content)
+
+    batch_result = await download_current_idp_search_page_images(
+        params=DownloadCurrentIdpSearchPageImagesParams(
+            target_count=target_image_count,
+            max_items=50,
+            start_index=start_index,
+            images_per_item=1,
+            file_prefix='temple',
+            title_prefix=keyword_title_prefix(search_keyword),
+            allowed_host_suffixes=['idp.bl.uk', 'data.idp.bl.uk', 'bl.uk'],
+            record_filename='image_record.jsonl',
+            info_filename='temple_photo_info.md',
+        ),
+        browser_session=browser,
+    )
+    if batch_result.error:
+        print(f"⚠️ 断点预批量下载失败，交给 Agent 处理：{batch_result.error}")
+        return
+    if batch_result.extracted_content:
+        print(batch_result.extracted_content)
 
 
 async def rebuild_download_state_for_run(rewrite_title_file: bool) -> None:
@@ -884,6 +962,8 @@ async def run_agent_once(resume_run_override: bool | None = None):
     # === 3. 初始化本次运行状态并创建浏览器与 llm 实例 ===
     image_dir, agent_data_dir, title_file = prepare_runtime_state(run_dir, reset_state=False)
     if resume_run and not loc_download_task:
+        active = sync_idp_progress_from_page_queue(run_dir, target_image_count, search_keyword)
+        print(f"✅ 已从 idp_page_progress.json 选择续跑页：page={active['page']}, start_index={active['next_index']}")
         resume_context = build_resume_task_context(run_dir, target_image_count, search_keyword)
         task = task + resume_context
         print("✅ 已读取 image_record.jsonl，并把断点续跑上下文加入本次任务")
@@ -892,6 +972,12 @@ async def run_agent_once(resume_run_override: bool | None = None):
         await rebuild_download_state_for_run(rewrite_title_file=resume_run)
     else:
         print("\nℹ️ 当前不是 LOC 下载任务，跳过 LOC 队列状态重建")
+
+    api_key = os.environ.get('OPENAI_API_KEY', '').strip()
+    base_url = os.environ.get('OPENAI_BASE_URL', 'https://openapi.seu.edu.cn/v1')
+
+    if not api_key:
+        raise ValueError('未设置 OPENAI_API_KEY，无法启动 Agent。请先在 .env 或环境变量中配置。')
 
     browser = Browser(
         args=[
@@ -902,11 +988,13 @@ async def run_agent_once(resume_run_override: bool | None = None):
         downloads_path=str(image_dir),  # 下载文件保存到 image 目录
     )
 
-    api_key = os.environ.get('OPENAI_API_KEY', '').strip()
-    base_url = os.environ.get('OPENAI_BASE_URL', 'https://openapi.seu.edu.cn/v1')
-
-    if not api_key:
-        raise ValueError('未设置 OPENAI_API_KEY，无法启动 Agent。请先在 .env 或环境变量中配置。')
+    if resume_run and not loc_download_task:
+        await run_idp_resume_preflight(
+            browser=browser,
+            run_dir=run_dir,
+            target_image_count=target_image_count,
+            search_keyword=search_keyword,
+        )
 
     llm = ChatOpenAI(
         model='qwen3.5-397b-a17b',

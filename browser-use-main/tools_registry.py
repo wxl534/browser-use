@@ -3560,6 +3560,122 @@ def _record_idp_empty_page_event(page_url: str, page: int, start_index: int, tot
     return event_file
 
 
+def _canonical_idp_search_url(keyword: str, page: int, limit: int) -> str:
+    keyword = re.sub(r'\s+', ' ', str(keyword or '')).strip()
+    if not keyword:
+        keyword = 'china temple'
+    try:
+        page = max(1, int(page))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        limit = min(100, max(1, int(limit)))
+    except (TypeError, ValueError):
+        limit = 50
+    return 'https://idp.bl.uk/collection/?' + urlencode({'term': keyword, 'limit': limit, 'page': page})
+
+
+def _is_idp_search_results_url(url: str) -> bool:
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    host = (parsed.hostname or '').lower()
+    path = (parsed.path or '').rstrip('/').lower()
+    query = parse_qs(parsed.query)
+    return host == 'idp.bl.uk' and path in {'/collection', ''} and 'term' in query
+
+
+def _idp_consecutive_failure_threshold() -> int | None:
+    raw = os.environ.get('BROWSER_USE_IDP_MAX_CONSECUTIVE_BATCH_FAILURES', '').strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _record_idp_batch_failure(reason: str) -> int:
+    state = _load_idp_progress()
+    try:
+        count = int(state.get('consecutive_batch_failures') or 0)
+    except (TypeError, ValueError):
+        count = 0
+    count += 1
+    state['consecutive_batch_failures'] = count
+    state['last_batch_failure_reason'] = reason
+    state['updated_at'] = datetime.now(timezone.utc).isoformat()
+    _write_idp_progress(state)
+    return count
+
+
+async def _ensure_on_idp_search_results_page(browser_session) -> tuple[str, bool, str]:
+    """
+    Make sure the current tab shows an IDP search-results page before extraction.
+    Returns (current_url_after, navigated, note).
+    Uses keyword/page/limit from idp_progress.json (already maintained by the tool).
+    If progress is empty, just returns current URL unchanged.
+    """
+    current_url = await _current_browser_url(browser_session)
+    if _is_idp_search_results_url(current_url):
+        return current_url, False, ''
+    progress = _load_idp_progress()
+    keyword = str(progress.get('keyword') or '').strip()
+    if not keyword:
+        return current_url, False, ''
+    page_value = progress.get('next_page') or progress.get('current_page') or 1
+    limit_value = progress.get('limit') or 50
+    canonical = _canonical_idp_search_url(keyword, page_value, limit_value)
+    await _navigate_to_image_url(browser_session, canonical)
+    await asyncio.sleep(3)
+    new_url = await _current_browser_url(browser_session)
+    note = f'当前页不是 IDP 搜索结果页，已自动跳转回 {canonical}（来自 idp_progress.json）'
+    return new_url or canonical, True, note
+
+
+async def _extract_idp_with_recovery(
+    browser_session,
+    *,
+    max_items: int,
+    start_index: int,
+) -> tuple[dict, str]:
+    """
+    Wrap _extract_current_idp_search_items so that:
+    1) If current tab is not a search results page, navigate to the canonical URL first.
+    2) If JS evaluate raises RuntimeError, hard-refresh the current URL once and retry.
+    Returns (page_data, recovery_note). Raises only if the second attempt still fails.
+    """
+    _, _, nav_note = await _ensure_on_idp_search_results_page(browser_session)
+    try:
+        page_data = await _extract_current_idp_search_items(
+            browser_session,
+            max_items=max_items,
+            start_index=start_index,
+        )
+        return page_data, nav_note
+    except RuntimeError as exc:
+        refresh_url = await _current_browser_url(browser_session)
+        if refresh_url:
+            try:
+                await _navigate_to_image_url(browser_session, refresh_url)
+                await asyncio.sleep(3)
+            except Exception:
+                pass
+        page_data = await _extract_current_idp_search_items(
+            browser_session,
+            max_items=max_items,
+            start_index=start_index,
+        )
+        retry_note = f'首次提取 JS 异常（{exc}），刷新 {refresh_url or "当前页"} 后重试成功'
+        if nav_note:
+            return page_data, nav_note + '；' + retry_note
+        return page_data, retry_note
+
+
 async def _extract_current_idp_search_items(browser_session, max_items: int, start_index: int) -> dict:
     js_code = '''
     (function() {
@@ -3745,11 +3861,31 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
         current_url = await _current_browser_url(browser_session)
         _, current_page_from_url, _ = _current_idp_search_page_from_url(current_url)
         effective_start_index, start_index_note = _effective_idp_start_index(params.start_index, current_page_from_url)
-        page_data = await _extract_current_idp_search_items(
-            browser_session,
-            max_items=max_items,
-            start_index=effective_start_index,
-        )
+        try:
+            page_data, recovery_note = await _extract_idp_with_recovery(
+                browser_session,
+                max_items=max_items,
+                start_index=effective_start_index,
+            )
+        except RuntimeError as extract_exc:
+            failure_count = _record_idp_batch_failure(f'extract_js_error:{extract_exc}')
+            threshold = _idp_consecutive_failure_threshold()
+            corrupted = bool(threshold and failure_count >= threshold)
+            tag = 'idp_session_corrupted' if corrupted else 'idp_extract_failed'
+            advice = (
+                '请立刻调用 finish_download_task 结束本次会话，并使用 idp_progress.json / image_record.jsonl 中的真实数字；'
+                '禁止改用手动点 collection 详情页 / IIIF manifest tab / evaluate 扫 DOM 的方式继续。'
+                if corrupted
+                else '请勿改为手动点击详情页；重启浏览器会话后再从 idp_page_progress.json 续跑。'
+            )
+            return ActionResult(
+                error=(
+                    f'[{tag}] IDP 搜索页 JS 提取失败：{extract_exc}。'
+                    f' consecutive_batch_failures={failure_count}'
+                    + (f'/{threshold}' if threshold else '')
+                    + f'。{advice}'
+                )
+            )
         items = page_data.get('items') or []
         if not items:
             page_url_for_retry = str(page_data.get('page_url') or current_url)
@@ -3771,6 +3907,10 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
                     int(page_data.get('total_found') or 0),
                     'no_collection_items_after_reload',
                 )
+                failure_count = _record_idp_batch_failure('empty_idp_search_page_after_reload')
+                threshold = _idp_consecutive_failure_threshold()
+                corrupted = bool(threshold and failure_count >= threshold)
+                tag = 'idp_session_corrupted' if corrupted else 'idp_empty_page'
                 _write_idp_progress({
                     **_load_idp_progress(),
                     'keyword': keyword_for_retry,
@@ -3782,15 +3922,22 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
                     'empty_page_events_file': str(event_file),
                     'updated_at': datetime.now(timezone.utc).isoformat(),
                 })
+                advice = (
+                    '请立刻调用 finish_download_task 结束本次会话，最终数字必须取自 idp_progress.json / image_record.jsonl；'
+                    '禁止退化为手动点击 collection 详情页 / IIIF manifest tab / evaluate 扫 DOM。'
+                    if corrupted
+                    else '请重启浏览器会话后从 idp_page_progress.json 续跑；不要在当前会话用手动点击替代批量工具。'
+                )
                 return ActionResult(
                     error=(
-                        '当前 IDP 搜索页未提取到 /collection/ 结果，刷新后仍为空；'
-                        '这通常是 IDP SPA 初始化失败或浏览器会话变脏。'
+                        f'[{tag}] 当前 IDP 搜索页未提取到 /collection/ 结果，刷新后仍为空。'
                         f' page={page_for_retry}, start_index={effective_start_index}, '
                         f'body_text_length={page_data.get("body_text_length")}, '
                         f'anchor_count={page_data.get("anchor_count")}, '
-                        f'collection_link_count={page_data.get("collection_link_count")}. '
-                        '请重启浏览器会话后从 idp_page_progress.json 续跑。'
+                        f'collection_link_count={page_data.get("collection_link_count")}, '
+                        f'consecutive_batch_failures={failure_count}'
+                        + (f'/{threshold}' if threshold else '')
+                        + f'。{advice}'
                     )
                 )
         if not items:
@@ -3961,6 +4108,8 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
             msg += f'- 批量上限: agent 请求 max_items={requested_max_items}，已按 BROWSER_USE_IDP_BATCH_ITEM_CAP 限制为 {max_items}\n'
         if start_index_note:
             msg += f'- start_index 修正: {start_index_note}\n'
+        if recovery_note:
+            msg += f'- 自愈: {recovery_note}\n'
         if downloaded:
             msg += '- downloaded_first_20:\n' + '\n'.join(f'  - {line}' for line in downloaded[:20]) + '\n'
         if skipped:
@@ -3974,7 +4123,24 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
             long_term_memory=f'IDP 批量下载新增 {len(downloaded)} 张，当前 {validation["downloaded_records"]}/{params.target_count}',
         )
     except Exception as e:
-        return ActionResult(error=f'IDP 当前搜索页批量下载时出错: {str(e)}')
+        failure_count = _record_idp_batch_failure(f'unhandled_exception:{type(e).__name__}:{e}')
+        threshold = _idp_consecutive_failure_threshold()
+        corrupted = bool(threshold and failure_count >= threshold)
+        tag = 'idp_session_corrupted' if corrupted else 'idp_batch_unhandled_error'
+        advice = (
+            '请立刻调用 finish_download_task 结束本次会话，最终数字必须来自 idp_progress.json / image_record.jsonl；'
+            '禁止改为手动点击 collection 详情页 / IIIF manifest tab / evaluate 扫 DOM 的方式继续。'
+            if corrupted
+            else '请勿手动 fallback；重启浏览器会话后再继续。'
+        )
+        return ActionResult(
+            error=(
+                f'[{tag}] IDP 当前搜索页批量下载时出错: {str(e)}。'
+                f' consecutive_batch_failures={failure_count}'
+                + (f'/{threshold}' if threshold else '')
+                + f'。{advice}'
+            )
+        )
 
 
 def _generic_image_strategy_file() -> Path:

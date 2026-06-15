@@ -170,6 +170,8 @@ temple_photo_info.md
 5. 页面需要登录、付费或出现人机验证。
 6. 页面明显与关键词 `ssu` 或中国佛教语境无关。
 7. 连续出现 `browser not connected`、`No valid agent focus available`、`target may have detached` 或空白 SPA 页面时，不要继续循环恢复；调用 `done` 报告需要重启浏览器会话，并保留已下载记录。
+8. 当 `download_current_idp_search_page_images` 返回的错误以 `[idp_session_corrupted]`、`[idp_extract_failed]`、`[idp_empty_page]` 或 `[idp_batch_unhandled_error]` 开头，**禁止再调用批量工具、navigate_idp_search_page 之外的任何浏览器操作来"绕过"**；必须立刻调用 `finish_download_task` 结束本次会话，最终数字由 `image_record.jsonl` / `idp_progress.json` 决定。
+9. **禁止"手动 fallback"**：批量工具失败后，不允许通过点击 `/collection/<id>/` 详情页链接、打开 IIIF manifest 新 tab、用 `evaluate` 扫 DOM 的方式自行下载图片。手动方式会污染浏览器上下文，反过来让批量工具持续报 JS 异常。
 
 如果遇到人机验证，不要自动绕过，只在最终结果中报告需要人工处理。
 
@@ -214,7 +216,7 @@ temple_photo_info.md
 
 如果 `validate_download_completion` 显示 `Final download validation: INCOMPLETE` 且 `remaining_records_needed` 大于 0，不要结束任务，继续扫描后续搜索结果并下载新图片。只有校验报告显示 `Final download validation: SUCCESS`，或已经确认所有搜索结果处理完/网站不可继续访问，才调用 `finish_download_task`。
 
-最终输出必须完全来自 `finish_download_task` 返回的英文 ASCII 确定性报告；不要自己估算、不要写“约 50+”“DD+”“4DD error”等占位符或不合法 HTTP 状态码，不要额外扩写分析段落、玩笑、乱码、字母列表或主观总结。
+最终输出必须完全来自 `finish_download_task` 返回的英文 ASCII 确定性报告；不要自己估算、不要写"约 50+"、"DD+"、"4DD error" 等占位符或不合法 HTTP 状态码，不要额外扩写分析段落、玩笑、乱码、字母列表或主观总结。**特别禁止编造"Pages 2-4 (+134)、Page 8 (+45)"之类的分页分布表**：所有页号 / 张数必须来自 `idp_page_progress.json` 与 `image_record.jsonl` 真实记录，没有真实记录就不要写。
 
 最终报告必须包含：
 

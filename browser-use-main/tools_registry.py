@@ -25,6 +25,7 @@ import anyio
 from pydantic import BaseModel, Field
 
 from browser_use import ActionResult, Tools
+from concurrent_download import ConcurrentImageDownloader, image_download_concurrency
 from idp_page_progress import load_page_progress, mark_page_batch_result
 
 # 使用脚本所在目录作为项目基准路径；运行产物目录可由 main.py 动态配置
@@ -1331,15 +1332,33 @@ def _build_download_record_index(record_filename: str = 'image_record.jsonl') ->
     return index
 
 
-def _build_existing_image_hash_index() -> dict[str, Path]:
+def _build_existing_image_hash_index(record_index: 'DownloadRecordIndex | None' = None) -> dict[str, Path]:
     """
-    Scan IMAGE_DIR once per batch so duplicate orphan files do not require
-    re-hashing the whole directory for every new image.
+    扫描 IMAGE_DIR 建立 sha256 -> Path 索引，供本批次去重使用。
+
+    现实里每次新批次都重新 sha256 整个 image 目录会让"下载越多越慢"——
+    一千张 TIFF 起步就是几个 GB 的 IO。优化：优先复用 image_record.jsonl
+    里已经存好的 sha256（O(1) 取值），只对没有对应记录的孤儿文件再走真正
+    的 sha256 计算。
     """
     existing: dict[str, Path] = {}
     if not IMAGE_DIR.exists():
         return existing
+
+    known_files: set[str] = set()
+    if record_index is not None:
+        for file_hash, record in record_index.records_by_file_hash.items():
+            file_name = str(record.get('file_name') or '').strip()
+            if not file_name:
+                continue
+            candidate = IMAGE_DIR / Path(file_name).name
+            if candidate.exists() and candidate.is_file():
+                existing.setdefault(file_hash, candidate)
+                known_files.add(candidate.name)
+
     for image_path in sorted(IMAGE_DIR.iterdir(), key=lambda path: path.name.lower()):
+        if image_path.name in known_files:
+            continue
         if not image_path.is_file() or image_path.name == 'rename_record.txt':
             continue
         if normalize_image_ext(image_path.suffix, fallback='') not in EXT_TO_PIL_FORMAT:
@@ -1408,11 +1427,15 @@ async def _record_saved_image_fast(
     info_filename: str,
     record_index: DownloadRecordIndex,
     existing_image_hashes: dict[str, Path],
+    precomputed_file_hash: str | None = None,
 ) -> ActionResult:
     """
     Fast batch-only record path: uses in-memory indexes and append-only writes.
     It intentionally avoids record_downloaded_image(), which reloads JSONL and
     rescans IMAGE_DIR on every call.
+
+    ``precomputed_file_hash`` 允许调用方传入已经算好的 sha256，避免一张图被
+    哈希两次（批量循环外面会先算一次用于内容去重）。
     """
     try:
         data_dir = AGENT_DATA_DIR
@@ -1428,7 +1451,9 @@ async def _record_saved_image_fast(
         if sequence in record_index.used_sequences:
             return ActionResult(error=f'序号 #{sequence} 已有记录，拒绝覆盖旧记录')
 
-        file_hash = _sha256_file(image_path)
+        file_hash = (precomputed_file_hash or '').strip().lower()
+        if not re.fullmatch(r'[0-9a-f]{64}', file_hash or ''):
+            file_hash = _sha256_file(image_path)
         existing_content_record = record_index.records_by_file_hash.get(file_hash)
         if existing_content_record:
             image_path.unlink(missing_ok=True)
@@ -3872,7 +3897,7 @@ async def _fetch_idp_manifest_summary_in_browser(browser_session, manifest_url: 
 async def download_current_idp_search_page_images(params: DownloadCurrentIdpSearchPageImagesParams, browser_session):
     try:
         record_index = _build_download_record_index(params.record_filename)
-        existing_image_hashes = _build_existing_image_hash_index()
+        existing_image_hashes = _build_existing_image_hash_index(record_index)
         next_sequence = max(record_index.max_sequence, _max_image_file_sequence(params.file_prefix)) + 1
         remaining = max(0, params.target_count - record_index.downloaded_count)
         if remaining == 0:
@@ -3976,10 +4001,15 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
         skipped: list[str] = []
         errors: list[str] = []
         processed_items = 0
+        evidence_keyword = keyword or params.title_prefix or 'IDP'
 
         async with DOWNLOAD_LOCK:
+            # Phase 1：顺序解析 manifest，过滤已下载 URL，构造下载候选
+            candidates: list[dict] = []
+            remaining_target = max(0, params.target_count - record_index.downloaded_count)
+            candidate_cap = max(remaining_target + len(items), max_items)
             for item in items:
-                if record_index.downloaded_count >= params.target_count:
+                if len(candidates) >= candidate_cap:
                     break
                 processed_items += 1
                 manifest_url = str(item.get('manifest_url') or '')
@@ -4000,78 +4030,128 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
                     skipped.append(f'{page_url}: manifest 未找到可下载图片')
                     continue
 
-                saved_for_item = 0
+                label = _normalize_title(str(manifest.get('label') or item.get('title') or item.get('id') or 'IDP item'))
+                metadata_text = str(manifest.get('metadata') or '').strip() or '未显示'
+                summary_text = str(manifest.get('summary') or label or 'IDP official collection image').strip()
+
+                per_item_added = 0
                 for image_url in image_urls:
-                    if saved_for_item >= params.images_per_item:
+                    if per_item_added >= params.images_per_item:
                         break
-                    if record_index.downloaded_count >= params.target_count:
+                    if len(candidates) >= candidate_cap:
                         break
                     existing_record = record_index.records_by_image_url.get(image_url)
                     if existing_record:
                         skipped.append(f'{page_url}: 图片 URL 已记录 #{existing_record.get("sequence")}')
                         continue
+                    candidates.append({
+                        'page_url': page_url,
+                        'image_url': image_url,
+                        'label': label,
+                        'metadata': metadata_text,
+                        'summary': summary_text,
+                    })
+                    per_item_added += 1
+
+            # Phase 2：通过共享 aiohttp 会话并发拉取图片字节
+            async def _fetch_one(index: int, cand: dict) -> dict:
+                tmp_target = _unique_path(
+                    IMAGE_DIR / f'{params.file_prefix}_pending_{index:04d}{_image_suffix_from_url(cand["image_url"])}'
+                )
+                try:
+                    await downloader.fetch_to_file(
+                        cand['image_url'],
+                        tmp_target,
+                        referer=cand['page_url'],
+                    )
+                    return {**cand, 'image_path': tmp_target, 'download_method': 'python_direct', 'fetch_error': None}
+                except Exception as direct_exc:
+                    try:
+                        path = await _browser_fetch_image_to_file(
+                            browser_session,
+                            cand['image_url'],
+                            tmp_target.name,
+                        )
+                        return {
+                            **cand,
+                            'image_path': path,
+                            'download_method': f'browser_context_fetch_after_python_error:{direct_exc}',
+                            'fetch_error': None,
+                        }
+                    except Exception as browser_exc:
+                        return {
+                            **cand,
+                            'image_path': None,
+                            'download_method': 'fail',
+                            'fetch_error': f'python={direct_exc}; browser={browser_exc}',
+                        }
+
+            fetch_results: list[dict] = []
+            if candidates:
+                async with ConcurrentImageDownloader(timeout_seconds=params.timeout_seconds) as downloader:
+                    fetch_results = await asyncio.gather(*(_fetch_one(i, c) for i, c in enumerate(candidates)))
+
+            # Phase 3：串行记录（保留原 sha256 + 去重 + JSONL 追加逻辑）
+            for result in fetch_results:
+                image_url = result['image_url']
+                page_url = result['page_url']
+                if record_index.downloaded_count >= params.target_count:
+                    leftover = result.get('image_path')
+                    if leftover:
+                        Path(leftover).unlink(missing_ok=True)
+                    continue
+                if result.get('fetch_error'):
+                    _record_generic_image_method_failure('browser_context_fetch', 0, image_url, result['fetch_error'])
+                    errors.append(f'{page_url}: 图片下载失败: {result["fetch_error"]}')
+                    continue
+
+                image_path: Path = result['image_path']
+                try:
+                    file_hash = _sha256_file(image_path)
+                    existing_content_record = record_index.records_by_file_hash.get(file_hash)
+                    if existing_content_record:
+                        image_path.unlink(missing_ok=True)
+                        skipped.append(f'{page_url}: 图片内容已记录 #{existing_content_record.get("sequence")}')
+                        continue
+                    existing_image_path = existing_image_hashes.get(file_hash)
+                    if existing_image_path and existing_image_path.resolve() != image_path.resolve():
+                        image_path.unlink(missing_ok=True)
+                        skipped.append(f'{page_url}: image 目录已有相同图片 {existing_image_path.name}')
+                        continue
 
                     while next_sequence in record_index.used_sequences:
                         next_sequence += 1
                     sequence = next_sequence
-                    file_name = f'{params.file_prefix}_{sequence:03d}'
-                    label = _normalize_title(str(manifest.get('label') or item.get('title') or item.get('id') or 'IDP item'))
+                    label = result['label']
                     title = _normalize_title(f'{params.title_prefix}_{sequence:03d}_{label}')
 
-                    try:
-                        try:
-                            image_path = await _download_image_to_file(
-                                image_url,
-                                file_name,
-                                params.timeout_seconds,
-                                referer=page_url,
-                                cookies=None,
-                            )
-                            download_method = 'python_direct'
-                        except Exception as direct_exc:
-                            image_path = await _browser_fetch_image_to_file(browser_session, image_url, file_name)
-                            download_method = f'browser_context_fetch_after_python_error:{direct_exc}'
-                        file_hash = _sha256_file(image_path)
-                        existing_content_record = record_index.records_by_file_hash.get(file_hash)
-                        if existing_content_record:
-                            image_path.unlink(missing_ok=True)
-                            skipped.append(f'{page_url}: 图片内容已记录 #{existing_content_record.get("sequence")}')
-                            continue
-
-                        existing_image_path = existing_image_hashes.get(file_hash)
-                        if existing_image_path and existing_image_path.resolve() != image_path.resolve():
-                            image_path.unlink(missing_ok=True)
-                            skipped.append(f'{page_url}: image 目录已有相同图片 {existing_image_path.name}')
-                            continue
-
-                        evidence_keyword = keyword or params.title_prefix or 'IDP'
-                        record_result = await _record_saved_image_fast(
-                            image_path=image_path,
-                            sequence=sequence,
-                            title=title,
-                            collection_title=label,
-                            page_url=page_url,
-                            image_url=image_url,
-                            evidence=f'IDP search result for {evidence_keyword}; image URL resolved from official IIIF manifest.',
-                            metadata=str(manifest.get('metadata') or '').strip() or '未显示',
-                            summary=str(manifest.get('summary') or label or 'IDP official collection image').strip(),
-                            record_filename=params.record_filename,
-                            info_filename=params.info_filename,
-                            record_index=record_index,
-                            existing_image_hashes=existing_image_hashes,
-                        )
-                        if record_result.error:
-                            image_path.unlink(missing_ok=True)
-                            errors.append(f'{page_url}: 记录失败: {record_result.error}')
-                            continue
-                        _record_generic_image_method_success(download_method.split(':', 1)[0], sequence, image_url)
-                        recorded_file_name = str((record_index.records_by_image_url.get(image_url) or {}).get('file_name') or image_path.name)
-                        downloaded.append(f'#{sequence}: {recorded_file_name} | {label} | {page_url} | {download_method}')
-                        next_sequence = max(next_sequence + 1, record_index.max_sequence + 1)
-                        saved_for_item += 1
-                    except Exception as exc:
-                        _record_generic_image_method_failure('browser_context_fetch', sequence, image_url, str(exc))
-                        errors.append(f'{page_url}: 图片下载失败: {exc}')
+                    record_result = await _record_saved_image_fast(
+                        image_path=image_path,
+                        sequence=sequence,
+                        title=title,
+                        collection_title=label,
+                        page_url=page_url,
+                        image_url=image_url,
+                        evidence=f'IDP search result for {evidence_keyword}; image URL resolved from official IIIF manifest.',
+                        metadata=result['metadata'],
+                        summary=result['summary'],
+                        record_filename=params.record_filename,
+                        info_filename=params.info_filename,
+                        record_index=record_index,
+                        existing_image_hashes=existing_image_hashes,
+                        precomputed_file_hash=file_hash,
+                    )
+                    if record_result.error:
+                        image_path.unlink(missing_ok=True)
+                        errors.append(f'{page_url}: 记录失败: {record_result.error}')
+                        continue
+                    _record_generic_image_method_success(result['download_method'].split(':', 1)[0], sequence, image_url)
+                    recorded_file_name = str((record_index.records_by_image_url.get(image_url) or {}).get('file_name') or image_path.name)
+                    downloaded.append(f'#{sequence}: {recorded_file_name} | {label} | {page_url} | {result["download_method"]}')
+                    next_sequence = max(next_sequence + 1, record_index.max_sequence + 1)
+                except Exception as exc:
+                    _record_generic_image_method_failure('record_phase', 0, image_url, str(exc))
+                    errors.append(f'{page_url}: 图片记录阶段出错: {exc}')
 
         validation = validate_download_artifacts(
             target_count=params.target_count,
@@ -4129,6 +4209,7 @@ async def download_current_idp_search_page_images(params: DownloadCurrentIdpSear
             f'- 跳过: {len(skipped)}\n'
             f'- 错误: {len(errors)}\n'
             f'- 当前有效记录: {validation["downloaded_records"]}/{params.target_count}\n'
+            f'- 并发下载: {image_download_concurrency()} (env BROWSER_USE_IMAGE_DOWNLOAD_CONCURRENCY)\n'
             f'- 进度文件: {progress_file}\n'
             f'- 下次建议: page={active_page["page"]}, start_index={active_page["next_index"]}\n'
         )

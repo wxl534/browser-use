@@ -303,6 +303,34 @@ tools = Tools()
 registry = tools.registry
 
 
+# === Legacy 工具注册开关 ===
+#
+# LOC（Library of Congress）和 Kyohaku（京都国立博物馆）的整套适配器在当前 IDP
+# 主线任务里既不使用、也被 task.md 显式禁止；为了避免它们出现在 Agent 的工具列表
+# 里干扰决策，默认不注册。
+#
+# 如果以后要恢复使用，设环境变量 BROWSER_USE_ENABLE_LEGACY_TOOLS=1 即可，代码本身
+# 没有移动，原地仍可阅读和维护。详见 legacy/README.md。
+LEGACY_TOOLS_ENABLED = os.environ.get('BROWSER_USE_ENABLE_LEGACY_TOOLS', '').strip() in {'1', 'true', 'TRUE', 'yes', 'YES'}
+
+
+def legacy_tools_action(*args, **kwargs):
+    """Conditional wrapper around @tools.action for LOC/Kyohaku legacy tools.
+
+    When BROWSER_USE_ENABLE_LEGACY_TOOLS is set, behaves exactly like
+    `tools.action(...)`. Otherwise the decorated function is returned untouched,
+    so it stays callable from Python but is not registered into the agent's
+    tool catalogue.
+    """
+    if LEGACY_TOOLS_ENABLED:
+        return tools.action(*args, **kwargs)
+
+    def _noop(func):
+        return func
+
+    return _noop
+
+
 # === 路径安全验证 ===
 
 # 允许访问的基础目录（基于项目位置）
@@ -2156,7 +2184,7 @@ async def _detect_human_verification(browser_session) -> dict:
 
 # === 注册自定义动作 ===
 
-@tools.action(
+@legacy_tools_action(
     description='收集当前 LOC 搜索结果页中的详情页标题和 URL，保存为可恢复的 browseruse_agent_data/loc_result_queue.json 队列，避免滚动和重复点击。',
     param_model=CollectLocResultsParams,
 )
@@ -2243,7 +2271,7 @@ async def collect_loc_result_queue(params: CollectLocResultsParams, browser_sess
         return ActionResult(error=f'收集 LOC 结果队列时出错: {str(e)}')
 
 
-@tools.action(
+@legacy_tools_action(
     description='从 browseruse_agent_data/loc_result_queue.json 中返回下一个 pending 的 LOC item，并可自动标记为 in_progress；不要让 agent 直接读 JSON 文件。',
     param_model=GetNextLocQueueItemParams,
 )
@@ -2292,7 +2320,7 @@ async def get_next_loc_queue_item(params: GetNextLocQueueItemParams):
         return ActionResult(error=f'读取下一个 LOC 队列项时出错: {str(e)}')
 
 
-@tools.action(
+@legacy_tools_action(
     description='把 LOC 队列中的指定 URL 标记为 pending/in_progress/downloaded/skipped/failed，并清理或写入 error；用于无 TIFF、页面异常或手动跳过后的状态同步。',
     param_model=MarkLocQueueItemParams,
 )
@@ -2361,7 +2389,7 @@ async def mark_loc_queue_item(params: MarkLocQueueItemParams):
         return ActionResult(error=f'更新 LOC 队列项时出错: {str(e)}')
 
 
-@tools.action(
+@legacy_tools_action(
 	description='收集当前 Kyohaku 搜索结果页中的藏品详情页标题和 URL，保存为可恢复的 browseruse_agent_data/kyohaku_result_queue.json 队列，避免靠滚动反复寻找结果。',
 	param_model=CollectKyohakuResultsParams,
 )
@@ -2454,7 +2482,7 @@ async def collect_kyohaku_result_queue(params: CollectKyohakuResultsParams, brow
 		return ActionResult(error=f'收集 Kyohaku 结果队列时出错: {str(e)}')
 
 
-@tools.action(
+@legacy_tools_action(
 	description='从 browseruse_agent_data/kyohaku_result_queue.json 中返回下一个 pending 的 Kyohaku 藏品，并可自动标记为 in_progress。',
 	param_model=GetNextKyohakuQueueItemParams,
 )
@@ -2503,7 +2531,7 @@ async def get_next_kyohaku_queue_item(params: GetNextKyohakuQueueItemParams):
 		return ActionResult(error=f'读取下一个 Kyohaku 队列项时出错: {str(e)}')
 
 
-@tools.action(
+@legacy_tools_action(
 	description='把 Kyohaku 队列中的指定 URL 标记为 pending/in_progress/downloaded/skipped/failed，并清理或写入 error。',
 	param_model=MarkKyohakuQueueItemParams,
 )
@@ -2613,7 +2641,7 @@ async def wait_for_human_verification(params: WaitForHumanVerificationParams, br
         return ActionResult(error=f'等待人机验证时出错: {str(e)}')
 
 
-@tools.action(
+@legacy_tools_action(
     description='合并并清理 LOC 队列文件，过滤无关条目，按 download_record.jsonl 和 image 目录重建下载状态、标题和清单。',
     param_model=RebuildLocDownloadStateParams,
 )
@@ -4653,7 +4681,7 @@ async def _save_kyohaku_by_method(
     raise RuntimeError(f'未知 Kyohaku 图片保存方法: {method}')
 
 
-@tools.action(
+@legacy_tools_action(
     description=(
         '京都国立博物馆/KNMDB 专用：优先从当前页面 DOM 自动提取 /art_images/ 原图 URL，'
         '用 Python 直接下载到 image 目录，并同步写入 image_record.jsonl、title.txt 和 temple_photo_info.md。'
@@ -4765,7 +4793,7 @@ async def download_kyohaku_image(params: DownloadKyohakuImageParams, browser_ses
         return ActionResult(error=f'直接下载 Kyohaku 图片时出错: {str(e)}')
 
 
-@tools.action(
+@legacy_tools_action(
     description=(
         'Kyohaku 当前藏品批量下载工具：在当前藏品详情页或图片列表页一次性提取该藏品全部 /art_images/ 大图 URL，'
         '按页面顺序批量保存并写入 image_record.jsonl、title.txt 和 temple_photo_info.md。'
@@ -4928,7 +4956,7 @@ async def download_current_kyohaku_item_images(params: DownloadCurrentKyohakuIte
         return ActionResult(error=f'批量下载当前 Kyohaku 藏品图片时出错: {str(e)}')
 
 
-@tools.action(
+@legacy_tools_action(
     description=(
         'Kyohaku 图片浏览器会话保存工具：作为“右键另存为”的自动化等价方案。'
         '它不操作不稳定的系统右键菜单，而是在当前浏览器页面上下文中 fetch 图片 Blob，'
@@ -5001,7 +5029,7 @@ async def save_kyohaku_image_via_browser(params: SaveKyohakuImageViaBrowserParam
         return ActionResult(error=f'浏览器会话保存 Kyohaku 图片时出错: {str(e)}')
 
 
-@tools.action(
+@legacy_tools_action(
     description=(
         'Kyohaku 截图兜底工具：先打开 /art_images/ 原图页（如果提供 image_url），'
         '能直接获取原始图片字节时优先保存原始格式；否则只截取页面中最大的可见 <img> 元素，'
@@ -5331,7 +5359,7 @@ class SelectDownloadFormatParams(BaseModel):
     )
 
 
-@tools.action(
+@legacy_tools_action(
     description='在LOC网站详情页中自动找到 TIFF 下载 URL；默认用 Python 直接下载到 image 目录，成功后写 title.txt 和 download_record.jsonl。',
     param_model=SelectDownloadFormatParams,
 )

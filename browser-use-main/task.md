@@ -177,28 +177,13 @@ temple_photo_info.md
 
 ## 明确禁止
 
-- 不要调用 LOC 专用工具：
-  - `collect_loc_result_queue`
-  - `get_next_loc_queue_item`
-  - `mark_loc_queue_item`
-  - `rebuild_loc_download_state`
-  - `select_download_format`
-- 不要调用 Kyohaku 专用工具：
-  - `collect_kyohaku_result_queue`
-  - `get_next_kyohaku_queue_item`
-  - `mark_kyohaku_queue_item`
-  - `download_kyohaku_image`
-  - `download_current_kyohaku_item_images`
-  - `save_kyohaku_image_via_browser`
-  - `clean_kyohaku_screenshot`
+- 默认运行模式下，IDP 搜索 + 通用下载之外的旧工具（LOC / Kyohaku 等）不会注册；如果需要启用，必须由部署者显式设置环境变量 `BROWSER_USE_ENABLE_LEGACY_TOOLS=1`。Agent 自身永远不要尝试调用这些旧工具。
 - 不要在已提取到 IIIF / viewer / download image URL 后继续点击下载按钮或反复 scroll；直接调用 `download_image_from_url`。
 - 不要在 IDP 搜索结果页逐个点开 50 个结果；必须先调用 `download_current_idp_search_page_images` 批量处理当前页。
 - 不要因为某页重复或失败就跳到 page 999 / page 5000；只能按进度文件顺序递增页码。
 - 不要手写 IDP 搜索分页 URL；必须使用 `navigate_idp_search_page`。
 - 不要使用 `evaluate(code="自定义工具(...)")` 的写法调用工具。
 - 不要使用 `write_file` 记录标题或信息表。
-- 不要读取或修改 `loc_result_queue.json`。
-- 不要读取或修改 `download_record.jsonl`。
 - 不要访问非官方图片搜索引擎、社交媒体或无关外站。
 - 不要下载 PDF、视频、音频或网页附件。
 - 不要重复下载同一张图。

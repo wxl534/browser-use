@@ -20,12 +20,10 @@ from idp_page_progress import select_next_page
 from tools_registry import (
     DownloadCurrentIdpSearchPageImagesParams,
     NavigateIdpSearchPageParams,
-    RebuildLocDownloadStateParams,
     configure_runtime_paths,
     download_current_idp_search_page_images,
     format_download_validation_report,
     navigate_idp_search_page,
-    rebuild_loc_download_state,
     tools,
     validate_download_artifacts,
 )
@@ -267,20 +265,6 @@ def write_run_lock(run_dir: Path, keyword: str, target_image_count: int, resume_
     }
     (run_dir / 'run.lock').write_text(json.dumps(lock, ensure_ascii=False, indent=2), encoding='utf-8')
     (run_dir / 'run_config.json').write_text(json.dumps(lock, ensure_ascii=False, indent=2), encoding='utf-8')
-
-
-def is_loc_download_task(task: str) -> bool:
-    """
-    判断当前任务是否依赖 LOC 专用队列/下载记录。
-    非 LOC 任务不能运行 LOC 状态重建，否则会覆盖通用 title.txt。
-    """
-    loc_markers = (
-        'loc.gov',
-        'www.loc.gov',
-        'Library of Congress',
-        '美国国会图书馆',
-    )
-    return any(marker in task for marker in loc_markers)
 
 
 def read_task_file(task_file: Path) -> str:
@@ -645,21 +629,6 @@ async def run_idp_resume_preflight(
         print(batch_result.extracted_content)
 
 
-async def rebuild_download_state_for_run(rewrite_title_file: bool) -> None:
-    """
-    在运行前后重建队列/标题状态，清掉中断留下的 in_progress。
-    """
-    result = await rebuild_loc_download_state(params=RebuildLocDownloadStateParams(
-        remove_irrelevant=True,
-        reset_in_progress=True,
-        rewrite_title_file=rewrite_title_file,
-    ))
-    if result.error:
-        print(f"⚠️ LOC 状态重建失败：{result.error}")
-    elif result.extracted_content:
-        print(result.extracted_content)
-
-
 def ensure_title_end_marker(title_file: Path) -> bool:
     """
     如果 title.txt 已经有标题但没有 END，补写 END 标记。
@@ -687,7 +656,6 @@ async def finalize_download_run(
     history,
     *,
     should_quit: bool,
-    loc_download_task: bool,
     title_file: Path,
     image_dir: Path,
     agent_data_dir: Path,
@@ -696,12 +664,6 @@ async def finalize_download_run(
     """
     无论正常结束还是用户手动停止，都执行状态重建、验证和自动重命名。
     """
-    if loc_download_task:
-        print("\n🧹 运行后重建 LOC 下载状态，按 download_record.jsonl 同步 title.txt")
-        await rebuild_download_state_for_run(rewrite_title_file=True)
-    else:
-        print("\nℹ️ 当前不是 LOC 下载任务，保留通用 title.txt / image_record.jsonl")
-
     if ensure_title_end_marker(title_file):
         print(f"✅ 已为标题文件补写 END 标记：{title_file}")
 
@@ -720,7 +682,7 @@ async def finalize_download_run(
         print(f"ℹ️ 目录不存在：{image_dir}")
 
     title_count = count_titles(title_file)
-    structured_record_file = agent_data_dir / ('download_record.jsonl' if loc_download_task else 'image_record.jsonl')
+    structured_record_file = agent_data_dir / 'image_record.jsonl'
     downloaded_record_count = count_downloaded_records(structured_record_file)
     print(
         f"\n📊 结果汇总：目标 {target_image_count} 张，"
@@ -746,13 +708,6 @@ async def finalize_download_run(
         error_count = sum(1 for e in errors if e is not None)
         print(f"\n⚠️ 执行过程中出现 {error_count} 个错误")
 
-    failed_record_file = agent_data_dir / 'kyohaku_failed_record.jsonl'
-    failed_count = 0
-    if failed_record_file.exists():
-        failed_count = len([line for line in failed_record_file.read_text(encoding='utf-8').splitlines() if line.strip()])
-    if failed_count:
-        print(f"\n⚠️ Kyohaku 持久化失败记录：{failed_count} 条，文件 {failed_record_file}")
-
     print("\n=== 任务统计 ===")
     print(f"总步数：{history.number_of_steps()}")
     print(f"总耗时：{history.total_duration_seconds():.2f} 秒")
@@ -770,26 +725,25 @@ async def finalize_download_run(
         else:
             print("❌ 最终校验未通过：不能声称已完成目标数量")
 
-        if not loc_download_task:
-            print("\n=== SQLite 数据库导入 ===")
-            sqlite_import_script = BASE_DIR / 'import_records_to_sqlite.py'
-            db_file = agent_data_dir / 'image_catalog.sqlite3'
-            import_ok = run_python_script(
-                str(sqlite_import_script),
-                "SQLite 图片记录导入",
-                [
-                    '--record-file',
-                    str(agent_data_dir / 'image_record.jsonl'),
-                    '--image-dir',
-                    str(image_dir),
-                    '--db-file',
-                    str(db_file),
-                ],
-            )
-            if import_ok:
-                print(f"✅ SQLite 数据库已更新：{db_file}")
-            else:
-                print(f"⚠️ SQLite 数据库导入失败，请手动执行：python {sqlite_import_script}")
+        print("\n=== SQLite 数据库导入 ===")
+        sqlite_import_script = BASE_DIR / 'import_records_to_sqlite.py'
+        db_file = agent_data_dir / 'image_catalog.sqlite3'
+        import_ok = run_python_script(
+            str(sqlite_import_script),
+            "SQLite 图片记录导入",
+            [
+                '--record-file',
+                str(agent_data_dir / 'image_record.jsonl'),
+                '--image-dir',
+                str(image_dir),
+                '--db-file',
+                str(db_file),
+            ],
+        )
+        if import_ok:
+            print(f"✅ SQLite 数据库已更新：{db_file}")
+        else:
+            print(f"⚠️ SQLite 数据库导入失败，请手动执行：python {sqlite_import_script}")
         return validation_result
 
     if not all_image_files:
@@ -932,7 +886,6 @@ async def run_agent_once(resume_run_override: bool | None = None):
     search_keyword = extract_search_keyword(task)
     max_failures, max_actions_per_step, max_steps = build_agent_run_limits(target_image_count)
     resume_run = resume_run_override if resume_run_override is not None else ask_resume_from_checkpoint(BASE_DIR)
-    loc_download_task = is_loc_download_task(task)
     run_dir = select_active_cache_dir(BASE_DIR, resume_run=resume_run, keyword=search_keyword)
     configure_runtime_paths(run_dir=run_dir, image_dir=run_dir, data_dir=run_dir)
     write_run_lock(run_dir, search_keyword, target_image_count, resume_run)
@@ -947,27 +900,17 @@ async def run_agent_once(resume_run_override: bool | None = None):
     else:
         print("\n🆕 已归档旧 ImagesCache（如存在），并创建新的 ImagesCache")
     
-    # === 2.5 清空 Information.md（功能已实现，暂时注释） ===
-    # 取消下面两行注释即可启用 Information.md 自动清理：
-    # from move_images import clear_information_md
-    # clear_information_md(interactive=False)
-    
     # 等待一下确保文件系统更新完成
     await asyncio.sleep(1)
     
     # === 3. 初始化本次运行状态并创建浏览器与 llm 实例 ===
     image_dir, agent_data_dir, title_file = prepare_runtime_state(run_dir, reset_state=False)
-    if resume_run and not loc_download_task:
+    if resume_run:
         active = sync_idp_progress_from_page_queue(run_dir, target_image_count, search_keyword)
         print(f"✅ 已从 idp_page_progress.json 选择续跑页：page={active['page']}, start_index={active['next_index']}")
         resume_context = build_resume_task_context(run_dir, target_image_count, search_keyword)
         task = task + resume_context
         print("✅ 已读取 image_record.jsonl，并把断点续跑上下文加入本次任务")
-    if loc_download_task:
-        print("\n🧹 启动前重建 LOC 队列状态，重置上次中断留下的 in_progress")
-        await rebuild_download_state_for_run(rewrite_title_file=resume_run)
-    else:
-        print("\nℹ️ 当前不是 LOC 下载任务，跳过 LOC 队列状态重建")
 
     api_key = os.environ.get('OPENAI_API_KEY', '').strip()
     base_url = os.environ.get('OPENAI_BASE_URL', 'https://openapi.seu.edu.cn/v1')
@@ -984,7 +927,7 @@ async def run_agent_once(resume_run_override: bool | None = None):
         downloads_path=str(image_dir),  # 下载文件保存到 image 目录
     )
 
-    if resume_run and not loc_download_task:
+    if resume_run:
         await run_idp_resume_preflight(
             browser=browser,
             run_dir=run_dir,
@@ -1044,7 +987,6 @@ async def run_agent_once(resume_run_override: bool | None = None):
     await finalize_download_run(
         history,
         should_quit=should_quit,
-        loc_download_task=loc_download_task,
         title_file=title_file,
         image_dir=image_dir,
         agent_data_dir=agent_data_dir,

@@ -25,6 +25,72 @@ from idp_page_progress import select_next_page
 
 BASE_DIR = Path(__file__).resolve().parent
 
+# main.py 用退出码 3 表示 LLM 端点被网关/门户拦截（致命、不可重试）。
+LLM_BLOCKED_EXIT_CODE = 3
+
+
+def terminate_process_tree(process: subprocess.Popen, *, grace_seconds: float = 5.0) -> None:
+    """终止子进程及其全部后代（如 main.py 启动的 Chromium）。
+
+    仅 process.terminate() 在 Windows 上只杀 main.py，会留下孤儿 Chrome 占住
+    browser_profile 锁，导致下一轮起不来。这里优先用 psutil 递归清理，
+    失败时回退到 Windows 的 `taskkill /T /F /PID` 或 POSIX 的进程组信号。
+    """
+    if process.poll() is not None:
+        return
+    pid = process.pid
+
+    # 首选：psutil 递归终止（browser-use 运行时本就依赖 psutil，跨平台最稳）。
+    try:
+        import psutil  # type: ignore
+
+        try:
+            parent = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            return
+        procs = parent.children(recursive=True)
+        procs.append(parent)
+        for proc in procs:
+            try:
+                proc.terminate()
+            except psutil.NoSuchProcess:
+                pass
+        _gone, alive = psutil.wait_procs(procs, timeout=grace_seconds)
+        for proc in alive:
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                pass
+        return
+    except Exception:
+        pass
+
+    # 回退：按平台杀进程树。
+    try:
+        if os.name == 'nt':
+            subprocess.run(
+                ['taskkill', '/F', '/T', '/PID', str(pid)],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            import signal as _signal
+
+            try:
+                os.killpg(os.getpgid(pid), _signal.SIGTERM)
+                time.sleep(grace_seconds)
+                if process.poll() is None:
+                    os.killpg(os.getpgid(pid), _signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    except Exception:
+        # 最后兜底：至少杀掉直接子进程。
+        try:
+            process.kill()
+        except Exception:
+            pass
+
 
 def yes_or_no(prompt: str) -> bool:
     while True:
@@ -72,6 +138,22 @@ def cache_is_locked(cache_dir: Path) -> bool:
 
 def cache_has_content(cache_dir: Path) -> bool:
     return cache_dir.exists() and any(cache_dir.iterdir())
+
+
+def clear_stale_run_lock(cache_dir: Path) -> bool:
+    """轮次之间 supervisor 独占 cache_dir，此时残留的 run.lock 一定是上一轮（可能被硬杀）遗留的。
+    若其 PID 已不存在则删除，避免 PID 复用导致 main.py 误判 cache_is_locked 而下到 ImagesCache_xx，
+    与 supervisor 读取的目录产生分叉、虚报 0 进度。"""
+    lock_file = cache_dir / 'run.lock'
+    if not lock_file.exists():
+        return False
+    if cache_is_locked(cache_dir):
+        return False
+    try:
+        lock_file.unlink()
+        return True
+    except OSError:
+        return False
 
 
 def should_resume_round(*, resume_first_round: bool, downloaded_count: int) -> bool:
@@ -128,6 +210,20 @@ def detect_search_keyword(task_text: str, default: str = 'china buddhist') -> st
     return default
 
 
+def _replace_whole_word(text: str, old: str, new: str) -> str:
+    """只替换作为完整词出现的 old，避免把 old 当子串误伤其它单词。
+
+    例如 old='si'、new='miao' 时，绝不能把 'session' 改成 'sesmiaoon'。
+    用词边界 \\b 包裹 old；若 old 含正则元字符或非词字符（如短语、含空格），
+    则退回到带边界断言的转义匹配。
+    """
+    import re
+    if not old or old == new:
+        return text
+    pattern = r'(?<!\w)' + re.escape(old) + r'(?!\w)'
+    return re.sub(pattern, lambda _m: new, text)
+
+
 def update_task_search_keyword(task_file: Path, new_keyword: str) -> dict:
     import re
     if not task_file.exists():
@@ -145,8 +241,7 @@ def update_task_search_keyword(task_file: Path, new_keyword: str) -> dict:
         old_prefix: new_prefix,
     }
     for old, new in replacements.items():
-        if old and old != new:
-            text = text.replace(old, new)
+        text = _replace_whole_word(text, old, new)
 
     task_file.write_text(text, encoding='utf-8')
     return {
@@ -348,7 +443,14 @@ def import_sqlite(cache_dir: Path) -> None:
     )
 
 
-def run_main_subprocess(cache_dir: Path, round_number: int, stop_event: threading.Event, *, resume_run: bool) -> int:
+def run_main_subprocess(
+    cache_dir: Path,
+    round_number: int,
+    stop_event: threading.Event,
+    *,
+    resume_run: bool,
+    round_timeout: int = 0,
+) -> int:
     log_file = cache_dir / 'auto_runner.log' if resume_run else BASE_DIR / f'.auto_runner_round_{os.getpid()}_{round_number}.log'
     env = {
         **os.environ.copy(),
@@ -361,6 +463,11 @@ def run_main_subprocess(cache_dir: Path, round_number: int, stop_event: threadin
         'BROWSER_USE_DISABLE_INPUT_MONITOR': '1',
         'PYTHONIOENCODING': 'utf-8',
     }
+    # POSIX 下新建会话，使整个子进程树共享进程组，便于 os.killpg 兜底清理。
+    popen_kwargs: dict = {}
+    if os.name != 'nt':
+        popen_kwargs['start_new_session'] = True
+
     with log_file.open('a', encoding='utf-8') as log:
         start_line = f'\n=== auto round {round_number} started {datetime.now(timezone.utc).isoformat()} ==='
         print(start_line, flush=True)
@@ -376,22 +483,50 @@ def run_main_subprocess(cache_dir: Path, round_number: int, stop_event: threadin
             encoding='utf-8',
             errors='replace',
             bufsize=1,
+            **popen_kwargs,
         )
+
+        # 进程退出后用于停掉两个看门狗线程，避免它们空转。
+        finished_event = threading.Event()
+        timed_out = threading.Event()
+
         def stop_child_on_quit() -> None:
-            stop_event.wait()
+            # 等待用户 quit 或进程自然结束，二者先到先停。
+            while not finished_event.is_set():
+                if stop_event.wait(timeout=0.5):
+                    if process.poll() is None:
+                        terminate_process_tree(process)
+                    return
+
+        def kill_on_timeout() -> None:
+            if round_timeout <= 0:
+                return
+            if finished_event.wait(timeout=round_timeout):
+                return  # 进程已正常结束
             if process.poll() is None:
-                process.terminate()
+                timed_out.set()
+                msg = f'\n⏱️ 第 {round_number} 轮超过 {round_timeout}s 仍未结束，判定卡死，清理进程树...'
+                print(msg, flush=True)
+                log.write(msg + '\n')
+                log.flush()
+                terminate_process_tree(process)
 
         threading.Thread(target=stop_child_on_quit, daemon=True).start()
+        threading.Thread(target=kill_on_timeout, daemon=True).start()
+
         assert process.stdout is not None
         for line in process.stdout:
             print(line, end='', flush=True)
             log.write(line)
             log.flush()
             if stop_event.is_set() and process.poll() is None:
-                process.terminate()
+                terminate_process_tree(process)
         returncode = process.wait()
-        end_line = f'\n=== auto round {round_number} exited {returncode} {datetime.now(timezone.utc).isoformat()} ==='
+        finished_event.set()  # 通知看门狗线程退出
+        # 进程退出后，确保没有残留的孤儿子进程（Chromium）继续占用 profile 锁。
+        terminate_process_tree(process)
+        status = 'timeout' if timed_out.is_set() else str(returncode)
+        end_line = f'\n=== auto round {round_number} exited {status} {datetime.now(timezone.utc).isoformat()} ==='
         print(end_line, flush=True)
         log.write(end_line + '\n')
     if not resume_run and log_file.exists():
@@ -411,6 +546,7 @@ def auto_run_until_target(
     sleep_seconds: int,
     max_reasonable_page: int,
     fallback_page: int,
+    round_timeout: int = 0,
 ) -> dict:
     target = read_target_from_task()
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -426,11 +562,12 @@ def auto_run_until_target(
     start_quit_listener(stop_event)
     no_progress_rounds = 0
     history: list[dict] = []
-    previous_count = read_downloaded_count(cache_dir)
 
     for round_number in range(1, max_rounds + 1):
         if stop_event.is_set():
             break
+        if clear_stale_run_lock(cache_dir):
+            print("🧹 已清理上一轮遗留的 run.lock（PID 已退出）", flush=True)
         target = read_target_from_task()
         before = read_downloaded_count(cache_dir)
         if before >= target:
@@ -456,7 +593,27 @@ def auto_run_until_target(
         else:
             print("🆕 本轮选择从头开始，不读取或同步续跑点", flush=True)
 
-        returncode = run_main_subprocess(cache_dir, round_number, stop_event, resume_run=resume_this_round)
+        returncode = run_main_subprocess(
+            cache_dir, round_number, stop_event, resume_run=resume_this_round, round_timeout=round_timeout
+        )
+        if returncode == LLM_BLOCKED_EXIT_CODE:
+            print(
+                '🛑 子进程报告 LLM 端点被拦截（退出码 3），停止自动重试。'
+                '请连接校园网/VPN 或检查 OPENAI_API_KEY / OPENAI_BASE_URL 后重新运行。',
+                flush=True,
+            )
+            history.append({
+                'round': round_number,
+                'target': target,
+                'before': before,
+                'after': read_downloaded_count(cache_dir),
+                'delta': 0,
+                'returncode': returncode,
+                'resume_run': resume_this_round,
+                'fatal': 'llm_endpoint_blocked',
+                'finished_at': datetime.now(timezone.utc).isoformat(),
+            })
+            break
         import_sqlite(cache_dir)
         configure_target(cache_dir, target, update_task=False)
         after = read_downloaded_count(cache_dir)
@@ -482,7 +639,6 @@ def auto_run_until_target(
             no_progress_rounds = 0
         if no_progress_rounds >= max_no_progress_rounds:
             break
-        previous_count = after
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
 
@@ -496,6 +652,7 @@ def auto_run_until_target(
         'resume_first_round': resume_first_round,
         'max_reasonable_page': max_reasonable_page,
         'fallback_page': fallback_page,
+        'round_timeout': round_timeout,
         'history': history,
         'completed': final_count >= read_target_from_task(),
     }
@@ -511,6 +668,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--sleep-seconds', type=int, default=5)
     parser.add_argument('--max-reasonable-page', type=int, default=200, help='超过该页码的断点会被视为异常跳页')
     parser.add_argument('--fallback-page', type=int, default=1, help='发现异常跳页且没有可靠续跑点时从该页重新开始')
+    parser.add_argument(
+        '--round-timeout',
+        type=int,
+        default=int(os.environ.get('BROWSER_USE_ROUND_TIMEOUT', '0')),
+        help='单轮 main.py 的最长运行秒数，超时判定卡死并清理进程树；<=0 表示不限制',
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--resume', action='store_true', help='第一轮从上次断点续跑')
     mode.add_argument('--new-run', action='store_true', help='第一轮归档旧 ImagesCache 并从头开始')
@@ -529,6 +692,7 @@ def main() -> int:
         sleep_seconds=args.sleep_seconds,
         max_reasonable_page=args.max_reasonable_page,
         fallback_page=args.fallback_page,
+        round_timeout=args.round_timeout,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if summary['completed'] else 2

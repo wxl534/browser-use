@@ -12,13 +12,55 @@ from openai.types.shared_params.response_format_json_schema import JSONSchema, R
 from pydantic import BaseModel
 
 from browser_use.llm.base import BaseChatModel
-from browser_use.llm.exceptions import ModelProviderError, ModelRateLimitError
+from browser_use.llm.exceptions import ModelAuthBlockedError, ModelProviderError, ModelRateLimitError
 from browser_use.llm.messages import BaseMessage
 from browser_use.llm.openai.serializer import OpenAIMessageSerializer
 from browser_use.llm.schema import SchemaOptimizer
 from browser_use.llm.views import ChatInvokeCompletion, ChatInvokeUsage
 
 T = TypeVar('T', bound=BaseModel)
+
+
+def _looks_like_html_gateway_page(text: str | None) -> bool:
+	"""Heuristically detect whether an LLM endpoint returned an HTML portal/gateway page
+	instead of a JSON completion.
+
+	A normal OpenAI-compatible endpoint replies with JSON. When a captive portal, campus
+	network / VPN gate, or WAF intercepts the request it serves an HTML document. We detect
+	this generically (no site-specific strings) by checking for an HTML document marker at
+	the start of the body, so it works for any provider behind any gateway.
+	"""
+	if not text:
+		return False
+	head = text.lstrip()[:512].lower()
+	return head.startswith('<!doctype html') or head.startswith('<html') or '<head>' in head
+
+
+def _auth_block_error_from_status(error: 'APIStatusError', model: str, base_url: str | None) -> 'ModelAuthBlockedError | None':
+	"""Return a ModelAuthBlockedError if the APIStatusError carries an HTML gateway page,
+	otherwise None. Decision is based on Content-Type and/or an HTML body, not hardcoded hosts.
+	"""
+	content_type = ''
+	response = getattr(error, 'response', None)
+	if response is not None:
+		try:
+			content_type = (response.headers.get('content-type') or '').lower()
+		except Exception:
+			content_type = ''
+	is_html = 'text/html' in content_type or _looks_like_html_gateway_page(getattr(error, 'message', None))
+	if not is_html:
+		return None
+	hint = f' (base_url={base_url})' if base_url else ''
+	return ModelAuthBlockedError(
+		message=(
+			'LLM endpoint returned an HTML gateway/portal page instead of a JSON completion. '
+			'This usually means the request was intercepted by a captive portal, campus network / VPN gate, '
+			'or a WAF — check that the machine can reach the LLM endpoint (e.g. connect the required VPN) '
+			f'and that OPENAI_API_KEY / base_url are correct.{hint}'
+		),
+		status_code=getattr(error, 'status_code', 403) or 403,
+		model=model,
+	)
 
 
 @dataclass
@@ -304,7 +346,23 @@ class ChatOpenAI(BaseChatModel):
 			raise ModelProviderError(message=str(e), model=self.name) from e
 
 		except APIStatusError as e:
+			base_url = str(self.base_url) if self.base_url is not None else None
+			auth_block = _auth_block_error_from_status(e, model=self.name, base_url=base_url)
+			if auth_block is not None:
+				raise auth_block from e
 			raise ModelProviderError(message=e.message, status_code=e.status_code, model=self.name) from e
 
 		except Exception as e:
+			if _looks_like_html_gateway_page(str(e)):
+				base_url = str(self.base_url) if self.base_url is not None else None
+				hint = f' (base_url={base_url})' if base_url else ''
+				raise ModelAuthBlockedError(
+					message=(
+						'LLM endpoint returned an HTML gateway/portal page instead of a JSON completion. '
+						'This usually means the request was intercepted by a captive portal, campus network / VPN gate, '
+						'or a WAF — check that the machine can reach the LLM endpoint (e.g. connect the required VPN) '
+						f'and that OPENAI_API_KEY / base_url are correct.{hint}'
+					),
+					model=self.name,
+				) from e
 			raise ModelProviderError(message=str(e), model=self.name) from e

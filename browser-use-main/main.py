@@ -14,6 +14,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from browser_use import Agent, Browser, ChatOpenAI
+from browser_use.llm.exceptions import ModelAuthBlockedError
+from browser_use.llm.messages import UserMessage
 from idp_page_progress import select_next_page
 
 # 从独立的工具注册模块导入
@@ -227,13 +229,27 @@ def archive_cache(images_root: Path, cache_dir: Path, keyword: str) -> Path | No
     return target_dir
 
 
-def select_active_cache_dir(base_dir: Path, *, resume_run: bool, keyword: str) -> Path:
+def select_active_cache_dir(
+    base_dir: Path, *, resume_run: bool, keyword: str, explicit_run_dir: Path | None = None
+) -> Path:
     """
     选择本次运行的 ImagesCache。新流程会先把旧 ImagesCache 归档为搜索词目录。
     如果已有运行中的 lock，则使用 ImagesCache_01 / _02。
+
+    当外部 supervisor（auto_run_until_target.py）通过 BROWSER_USE_RUN_DIR 显式指定目录时，
+    直接使用它：supervisor 已经负责归档旧缓存/选择续跑目录，main.py 不应再独立挑目录，
+    否则两套系统可能各算各的、把图片下到不同的 ImagesCache_xx 而导致进度对不上。
     """
     images_root = base_dir / 'Images'
     images_root.mkdir(parents=True, exist_ok=True)
+
+    if explicit_run_dir is not None:
+        run_dir = Path(explicit_run_dir).expanduser()
+        if not run_dir.is_absolute():
+            run_dir = (base_dir / run_dir).resolve()
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return run_dir
+
     base_cache = images_root / CACHE_BASE_NAME
 
     if not resume_run and base_cache.exists() and not cache_is_locked(base_cache):
@@ -866,6 +882,26 @@ def run_python_script(
         return False
 
 
+async def preflight_llm_check(llm, base_url: str) -> None:
+    """运行 Agent 前先做一次最小 LLM 探活。
+
+    如果 LLM 端点被校园网/VPN 网关或 WAF 拦截（返回 HTML 门户页而非 JSON），
+    会抛出 ModelAuthBlockedError，直接中止本次运行，避免空跑十几分钟并烧 token。
+    其他类型的瞬时错误只告警、不阻断，交给正式运行时的重试逻辑处理。
+    """
+    try:
+        await asyncio.wait_for(
+            llm.ainvoke([UserMessage(content='ping')]),
+            timeout=int(os.environ.get('BROWSER_USE_PREFLIGHT_TIMEOUT', '30')),
+        )
+        print('✅ LLM 端点预检通过')
+    except ModelAuthBlockedError:
+        # 致命：网关拦截，重试无意义，直接向上抛出由入口处理退出码。
+        raise
+    except Exception as e:
+        print(f'⚠️ LLM 预检未通过（非拦截类错误，继续启动）：{type(e).__name__}: {e}')
+
+
 async def run_agent_once(resume_run_override: bool | None = None):
     global should_quit
     should_quit = False
@@ -886,7 +922,13 @@ async def run_agent_once(resume_run_override: bool | None = None):
     search_keyword = extract_search_keyword(task)
     max_failures, max_actions_per_step, max_steps = build_agent_run_limits(target_image_count)
     resume_run = resume_run_override if resume_run_override is not None else ask_resume_from_checkpoint(BASE_DIR)
-    run_dir = select_active_cache_dir(BASE_DIR, resume_run=resume_run, keyword=search_keyword)
+    supervised_run_dir = os.environ.get('BROWSER_USE_RUN_DIR', '').strip()
+    explicit_run_dir = Path(supervised_run_dir) if supervised_run_dir else None
+    if explicit_run_dir is not None:
+        print(f"🔗 受 supervisor 监督运行，使用其指定的缓存目录：{explicit_run_dir}")
+    run_dir = select_active_cache_dir(
+        BASE_DIR, resume_run=resume_run, keyword=search_keyword, explicit_run_dir=explicit_run_dir
+    )
     configure_runtime_paths(run_dir=run_dir, image_dir=run_dir, data_dir=run_dir)
     write_run_lock(run_dir, search_keyword, target_image_count, resume_run)
     print(f"📁 本次运行缓存目录：{run_dir}")
@@ -943,6 +985,9 @@ async def run_agent_once(resume_run_override: bool | None = None):
     )
     # llm = ChatBrowserUse()  # 官方 LLM，需付费订阅
 
+    # 预检：确认 LLM 端点真正可达（避免校园网/VPN 未连接时被网关拦截，空跑十几分钟烧 token）。
+    await preflight_llm_check(llm, base_url)
+
     # quit 回调：agent 每步执行前会调用此函数，返回 True 则停止
     async def check_should_quit() -> bool:
         return should_quit
@@ -983,6 +1028,15 @@ async def run_agent_once(resume_run_override: bool | None = None):
     except KeyboardInterrupt:
         print("\n\n⚠️  用户中断执行 (Ctrl+C)")
         return None
+    finally:
+        # 清理本次运行的 run.lock，避免正常退出后残留导致后续误判 cache 被占用。
+        # （被硬杀的情况由 supervisor 在轮次之间清理。）
+        lock_path = run_dir / 'run.lock'
+        try:
+            if lock_path.exists():
+                lock_path.unlink()
+        except OSError:
+            pass
 
     await finalize_download_run(
         history,
@@ -1000,4 +1054,10 @@ async def main():
     return await run_agent_once()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except ModelAuthBlockedError as e:
+        print(f"\n🛑 LLM 端点被拦截，已中止本次运行：{e.message}")
+        print("👉 请确认已连接校园网/VPN，且 OPENAI_API_KEY / OPENAI_BASE_URL 正确后重试。")
+        # 专用退出码 3：供 auto_run_until_target.py 识别为致命错误并立即停止重试。
+        sys.exit(3)

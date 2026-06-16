@@ -25,7 +25,7 @@ from browser_use.agent.cloud_events import (
 )
 from browser_use.agent.message_manager.utils import save_conversation
 from browser_use.llm.base import BaseChatModel
-from browser_use.llm.exceptions import ModelProviderError, ModelRateLimitError
+from browser_use.llm.exceptions import ModelAuthBlockedError, ModelProviderError, ModelRateLimitError
 from browser_use.llm.messages import BaseMessage, ContentPartImageParam, ContentPartTextParam, UserMessage
 from browser_use.tokens.service import TokenCost
 
@@ -1219,6 +1219,16 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			self.logger.warning(f'{error_msg}')
 			return
 
+		# Handle LLM gateway/portal interception - stop immediately instead of retrying.
+		# Retrying or switching fallback LLMs cannot fix a network gate, so fail fast and loud
+		# rather than burning steps and tokens against an endpoint that returns HTML.
+		if isinstance(error, ModelAuthBlockedError):
+			self.logger.error(f'🛑 LLM endpoint blocked, stopping run: {error.message}')
+			self.state.last_result = [ActionResult(error=f'LLM endpoint blocked: {error.message}')]
+			self.state.stopped = True
+			self._external_pause_event.set()
+			return
+
 		# Handle browser closed/disconnected errors - stop immediately instead of retrying
 		if self._is_browser_closed_error(error):
 			self.logger.warning(f'🛑 Browser closed or disconnected: {error}')
@@ -1907,6 +1917,10 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			return parsed
 		except ValidationError:
 			# Just re-raise - Pydantic's validation errors are already descriptive
+			raise
+		except ModelAuthBlockedError:
+			# Fatal, non-retryable: the LLM endpoint is intercepted by a gateway/portal.
+			# Switching to a fallback LLM cannot help, so propagate and let the run stop.
 			raise
 		except (ModelRateLimitError, ModelProviderError) as e:
 			# Check if we can switch to a fallback LLM

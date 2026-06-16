@@ -118,6 +118,20 @@ async def ensure_on_results_page(
     return new_url or canonical, True, note
 
 
+async def _hard_reload(browser_session: Any, url: str) -> None:
+    """用 CDP ``Page.navigate`` 强制顶层导航。
+
+    当页面 JS 执行上下文已被 Cloudflare/导航摧毁时，``window.location`` 赋值这类
+    JS 方式会一起失效；``Page.navigate`` 不依赖页面内 JS 上下文，仍能触发一次干净的
+    重新加载并重建执行上下文，是从“整页 JS 都 Uncaught”状态恢复的关键。
+    """
+    cdp_session = await browser_session.get_or_create_cdp_session()
+    await cdp_session.cdp_client.send.Page.navigate(
+        params={'url': url},
+        session_id=cdp_session.session_id,
+    )
+
+
 async def extract_with_recovery(
     adapter: SiteAdapter,
     browser_session: Any,
@@ -126,8 +140,13 @@ async def extract_with_recovery(
     max_items: int,
     start_index: int,
 ) -> tuple[SearchPageResult, str]:
-    """``adapter.extract_items`` + 自愈：JS 失败时刷新当前 URL 重试一次。"""
-    from tools_registry import _current_browser_url, _navigate_to_image_url
+    """``adapter.extract_items`` + 自愈。
+
+    首次提取 JS 失败通常意味着执行上下文被破坏（疑似 Cloudflare 反爬/人机校验）。
+    此时普通的 ``window.location`` 跳转无效，改用 ``Page.navigate`` 硬重载，并做多次
+    退避重试，给 Cloudflare “Just a moment…” 这类会自动放行的挑战页留出通过时间。
+    """
+    from tools_registry import _current_browser_url
 
     _, _, nav_note = await ensure_on_results_page(adapter, browser_session, agent_data_dir)
     try:
@@ -138,22 +157,41 @@ async def extract_with_recovery(
         )
         return page_data, nav_note
     except RuntimeError as exc:
-        refresh_url = await _current_browser_url(browser_session)
-        if refresh_url:
+        last_exc: Exception = exc
+
+    # 目标 URL：优先当前 URL（上下文已死时探测会返回 ''），否则用进度推算的 canonical 搜索 URL。
+    target_url = await _current_browser_url(browser_session)
+    if not target_url:
+        target_url = adapter.canonical_resume_url(load_site_progress(adapter, agent_data_dir))
+
+    for attempt in range(1, 4):
+        if target_url:
             try:
-                await _navigate_to_image_url(browser_session, refresh_url)
-                await asyncio.sleep(3)
+                await _hard_reload(browser_session, target_url)
             except Exception:
                 pass
-        page_data = await adapter.extract_items(
-            browser_session,
-            max_items=max_items,
-            start_index=start_index,
-        )
-        retry_note = f'首次提取 JS 异常（{exc}），刷新 {refresh_url or "当前页"} 后重试成功'
-        if nav_note:
-            return page_data, nav_note + '；' + retry_note
-        return page_data, retry_note
+        await asyncio.sleep(min(5 * attempt, 15))  # 退避，等待挑战页自动放行
+        try:
+            page_data = await adapter.extract_items(
+                browser_session,
+                max_items=max_items,
+                start_index=start_index,
+            )
+            retry_note = (
+                f'首次提取 JS 异常（{last_exc}）；用 Page.navigate 硬重载后第 {attempt} 次重试成功'
+            )
+            return page_data, (nav_note + '；' + retry_note) if nav_note else retry_note
+        except RuntimeError as retry_exc:
+            last_exc = retry_exc
+            refreshed = await _current_browser_url(browser_session)
+            if refreshed:
+                target_url = refreshed
+
+    raise RuntimeError(
+        '[context_lost] 连续多次提取失败，页面 JS 执行上下文持续不可用'
+        '（疑似 Cloudflare 反爬/人机校验，需人工在浏览器中通过验证或更换网络/代理后再续跑）。'
+        f'最后错误：{last_exc}'
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +337,49 @@ async def run_search_page_batch(
         if not items:
             page_url_for_retry = page_data.page_url or current_url
             keyword_for_retry, page_for_retry, limit_for_retry = adapter.parse_search_url(page_url_for_retry)
+            # 关键区分：当前页“已全部消费”（start_index 已达到/超过本页 total_found）不是失败，
+            # 而是应当翻到下一页的正常信号。早期版本把它误判为 [idp_empty_page] 失败，
+            # 又因 task.md 规则禁止在 [idp_empty_page] 后翻页，导致 agent 被永久卡在同一页。
+            page_consumed = page_data.total_found > 0 and start_index >= page_data.total_found
+            if page_consumed:
+                active_page = mark_page_batch_result(
+                    AGENT_DATA_DIR,
+                    keyword=keyword_for_retry,
+                    target_count=params.target_count,
+                    page=page_for_retry,
+                    start_index=start_index,
+                    processed_items=0,
+                    downloaded_count=0,
+                    skipped_count=0,
+                    error_count=0,
+                    total_found=page_data.total_found,
+                )
+                write_site_progress(adapter, AGENT_DATA_DIR, {
+                    **load_site_progress(adapter, AGENT_DATA_DIR),
+                    'keyword': keyword_for_retry,
+                    'current_page': page_for_retry,
+                    'next_page': active_page['page'],
+                    'next_index': active_page['next_index'],
+                    'limit': limit_for_retry,
+                    'target_count': params.target_count,
+                    'last_error': '',
+                    'consecutive_batch_failures': 0,
+                    'last_batch_failure_reason': '',
+                    'updated_at': datetime.now(timezone.utc).isoformat(),
+                })
+                return ActionResult(
+                    extracted_content=(
+                        f'✅ 当前 {adapter.page_label()} 搜索页 page={page_for_retry} 已全部消费'
+                        f'（total_found={page_data.total_found}, start_index={start_index}）。\n'
+                        f'➡️ 这不是错误，而是正常翻页信号。请调用 '
+                        f'navigate_idp_search_page(keyword="{keyword_for_retry}", page={active_page["page"]}, limit={limit_for_retry}) '
+                        f'跳到下一页，再调用 download_current_idp_search_page_images 继续下载。'
+                    ),
+                    include_in_memory=True,
+                    long_term_memory=(
+                        f'{adapter.page_label()} page={page_for_retry} 已消费完，下一页 page={active_page["page"]}'
+                    ),
+                )
             event_file = record_empty_page_event(
                 adapter,
                 AGENT_DATA_DIR,

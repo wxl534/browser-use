@@ -349,18 +349,47 @@ def sync_progress_from_page_queue(
     return active
 
 
-def configure_before_run(cache_dir: Path, resume_choice: bool | None = None) -> bool:
-    if yes_or_no('是否要修改搜索词？[y/N]: '):
-        new_keyword = input('请输入新的搜索词: ').strip()
-        if not new_keyword:
-            raise ValueError('搜索词不能为空')
-        old_keyword = detect_search_keyword(TASK_FILE.read_text(encoding='utf-8')) if TASK_FILE.exists() else 'china buddhist'
-        archive_summary = archive_cache_for_keyword_change(cache_dir, old_keyword, new_keyword)
-        summary = update_task_search_keyword(TASK_FILE, new_keyword)
-        update_cache_keyword(cache_dir, summary['new_keyword'])
-        print(json.dumps({'search_update': summary, 'cache_archive': archive_summary}, ensure_ascii=False, indent=2))
+def apply_keyword_change(cache_dir: Path, new_keyword: str) -> dict | None:
+    """非交互地把搜索词切换为 new_keyword：归档旧缓存、改写 task.md、更新缓存内关键词。
+    若关键词未变化则返回 None（不做任何破坏性操作）。"""
+    new_keyword = (new_keyword or '').strip()
+    if not new_keyword:
+        raise ValueError('搜索词不能为空')
+    old_keyword = detect_search_keyword(TASK_FILE.read_text(encoding='utf-8')) if TASK_FILE.exists() else 'china buddhist'
+    if not keyword_changed(old_keyword, new_keyword):
+        return None
+    archive_summary = archive_cache_for_keyword_change(cache_dir, old_keyword, new_keyword)
+    summary = update_task_search_keyword(TASK_FILE, new_keyword)
+    update_cache_keyword(cache_dir, summary['new_keyword'])
+    result = {'search_update': summary, 'cache_archive': archive_summary}
+    print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
+    return result
 
-    if yes_or_no('是否要修改目标下载数量？[y/N]: '):
+
+def configure_before_run(
+    cache_dir: Path,
+    resume_choice: bool | None = None,
+    *,
+    keyword_override: str | None = None,
+    target_override: int | None = None,
+) -> bool:
+    # 非交互模式：由 GUI/脚本通过参数传入关键词/目标，或在没有 TTY 时不再阻塞 input()。
+    non_interactive = (
+        keyword_override is not None
+        or target_override is not None
+        or not sys.stdin.isatty()
+    )
+
+    if keyword_override is not None:
+        apply_keyword_change(cache_dir, keyword_override)
+    elif not non_interactive and yes_or_no('是否要修改搜索词？[y/N]: '):
+        new_keyword = input('请输入新的搜索词: ').strip()
+        apply_keyword_change(cache_dir, new_keyword)
+
+    if target_override is not None:
+        summary = configure_target(cache_dir, int(target_override), update_task=True)
+        print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
+    elif not non_interactive and yes_or_no('是否要修改目标下载数量？[y/N]: '):
         target_text = input('请输入新的目标总下载数量: ').strip()
         target_count = int(target_text)
         summary = configure_target(cache_dir, target_count, update_task=True)
@@ -368,6 +397,9 @@ def configure_before_run(cache_dir: Path, resume_choice: bool | None = None) -> 
     if resume_choice is not None:
         print('♻️ 已通过参数选择断点续跑' if resume_choice else '🆕 已通过参数选择从头开始')
         return resume_choice
+    if non_interactive:
+        # 没有显式 --resume/--new-run 时，非交互默认从头开始，避免阻塞在 input()。
+        return False
     return yes_or_no('是否从上次断点续跑？[y/N]: ')
 
 
@@ -663,6 +695,8 @@ def auto_run_until_target(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Auto-run main.py until task.md target is reached.')
     parser.add_argument('--cache-dir', type=Path, default=DEFAULT_CACHE_DIR)
+    parser.add_argument('--keyword', type=str, default=None, help='非交互地设置搜索词；与当前不同则归档旧缓存并改写 task.md')
+    parser.add_argument('--target', type=int, default=None, help='非交互地设置目标下载总数并写入 task.md')
     parser.add_argument('--max-rounds', type=int, default=100)
     parser.add_argument('--max-no-progress-rounds', type=int, default=3)
     parser.add_argument('--sleep-seconds', type=int, default=5)
@@ -683,7 +717,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     resume_choice = True if args.resume else False if args.new_run else None
-    resume_first_round = configure_before_run(args.cache_dir, resume_choice=resume_choice)
+    resume_first_round = configure_before_run(
+        args.cache_dir,
+        resume_choice=resume_choice,
+        keyword_override=args.keyword,
+        target_override=args.target,
+    )
     summary = auto_run_until_target(
         cache_dir=args.cache_dir,
         resume_first_round=resume_first_round,

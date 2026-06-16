@@ -151,7 +151,13 @@ class IDPAdapter(IIIFAdapter):
             session_id=cdp_session.session_id,
         )
         if result.get('exceptionDetails'):
-            raise RuntimeError(result['exceptionDetails'].get('text', 'IDP 搜索结果提取失败'))
+            exc_details = result['exceptionDetails']
+            detail = (
+                (exc_details.get('exception') or {}).get('description')
+                or exc_details.get('text')
+                or 'IDP 搜索结果提取失败'
+            )
+            raise RuntimeError(detail)
         data = result.get('result', {}).get('value') or {}
         if not data.get('success'):
             raise RuntimeError(data.get('error', 'IDP 搜索结果提取失败'))

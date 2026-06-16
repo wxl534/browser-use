@@ -738,8 +738,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--page-delay-seconds',
         type=float,
-        default=float(os.environ.get('BROWSER_USE_PAGE_DELAY_SECONDS', '0')),
-        help='每页批量下载前的节流延时秒数，降低触发 Cloudflare 限流概率；传给子进程的 BROWSER_USE_PAGE_DELAY_SECONDS',
+        default=float(os.environ.get('BROWSER_USE_PAGE_DELAY_SECONDS', '6')),
+        help='每页批量下载前的节流延时秒数，降低触发 Cloudflare 限流概率；传给子进程的 BROWSER_USE_PAGE_DELAY_SECONDS（默认 6）',
     )
     parser.add_argument('--max-reasonable-page', type=int, default=200, help='超过该页码的断点会被视为异常跳页')
     parser.add_argument('--fallback-page', type=int, default=1, help='发现异常跳页且没有可靠续跑点时从该页重新开始')

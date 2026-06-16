@@ -19,8 +19,9 @@ import aiohttp
 import anyio
 
 
-DEFAULT_CONCURRENCY = 6
+DEFAULT_CONCURRENCY = 3
 DEFAULT_TIMEOUT_SECONDS = 180
+DEFAULT_PAGE_DELAY_SECONDS = 0.0
 
 _USER_AGENT = (
 	'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -39,9 +40,28 @@ def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
 	return max(minimum, value)
 
 
+def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
+	raw = os.environ.get(name, '').strip()
+	if not raw:
+		return default
+	try:
+		value = float(raw)
+	except ValueError:
+		return default
+	return max(minimum, value)
+
+
 def image_download_concurrency() -> int:
 	"""每批下载图片时的并发上限。可通过环境变量覆盖。"""
 	return _env_int('BROWSER_USE_IMAGE_DOWNLOAD_CONCURRENCY', DEFAULT_CONCURRENCY)
+
+
+def page_delay_seconds() -> float:
+	"""每页批量下载前的节流延时（秒），降低触发 Cloudflare 限流的概率。
+
+	默认 0（不额外等待），可通过环境变量 ``BROWSER_USE_PAGE_DELAY_SECONDS`` 覆盖。
+	"""
+	return _env_float('BROWSER_USE_PAGE_DELAY_SECONDS', DEFAULT_PAGE_DELAY_SECONDS, minimum=0.0)
 
 
 class ConcurrentImageDownloader:

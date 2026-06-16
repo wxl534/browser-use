@@ -21,7 +21,7 @@ from typing import Any
 from browser_use import ActionResult
 
 from adapters.base import SearchPageResult, SiteAdapter
-from concurrent_download import ConcurrentImageDownloader, image_download_concurrency
+from concurrent_download import ConcurrentImageDownloader, image_download_concurrency, page_delay_seconds
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +292,11 @@ async def run_search_page_batch(
                 record_filename=params.record_filename,
             ))
             return ActionResult(extracted_content='✅ 已达到目标数量，无需继续下载。\n' + report, include_in_memory=True)
+
+        # 反爬节流：每页批量下载前按需等待，降低触发 Cloudflare 限流的概率。
+        pacing_delay = page_delay_seconds()
+        if pacing_delay > 0:
+            await asyncio.sleep(pacing_delay)
 
         allowed_host_suffixes = _sanitize_allowed_host_suffixes(
             params.allowed_host_suffixes or adapter.default_host_suffixes()

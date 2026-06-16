@@ -92,6 +92,15 @@ def terminate_process_tree(process: subprocess.Popen, *, grace_seconds: float = 
             pass
 
 
+def _interruptible_sleep(seconds: float, stop_event: threading.Event) -> None:
+    """可被退出事件打断的睡眠，避免长冷却期间无法响应 q 退出。"""
+    end = time.monotonic() + max(0.0, seconds)
+    while time.monotonic() < end:
+        if stop_event.is_set():
+            return
+        time.sleep(min(1.0, end - time.monotonic()))
+
+
 def yes_or_no(prompt: str) -> bool:
     while True:
         answer = input(prompt).strip().lower()
@@ -576,6 +585,8 @@ def auto_run_until_target(
     max_rounds: int,
     max_no_progress_rounds: int,
     sleep_seconds: int,
+    cooldown_seconds: int,
+    cooldown_max_seconds: int,
     max_reasonable_page: int,
     fallback_page: int,
     round_timeout: int = 0,
@@ -671,8 +682,18 @@ def auto_run_until_target(
             no_progress_rounds = 0
         if no_progress_rounds >= max_no_progress_rounds:
             break
-        if sleep_seconds > 0:
-            time.sleep(sleep_seconds)
+        # 自适应冷却：本轮无新增通常意味着被 Cloudflare 限流，递增退避等待限流窗口恢复；
+        # 有新增时只做正常的轻量间隔。
+        if no_progress_rounds > 0 and cooldown_seconds > 0:
+            cooldown = min(cooldown_seconds * (2 ** (no_progress_rounds - 1)), cooldown_max_seconds)
+            print(
+                f"🧊 第 {round_number} 轮无新增（可能被反爬限流），冷却 {cooldown}s "
+                f"让限流窗口恢复后再续跑…（连续无进展 {no_progress_rounds}/{max_no_progress_rounds}）",
+                flush=True,
+            )
+            _interruptible_sleep(cooldown, stop_event)
+        elif sleep_seconds > 0:
+            _interruptible_sleep(sleep_seconds, stop_event)
 
     final_count = read_downloaded_count(cache_dir)
     summary = {
@@ -681,6 +702,8 @@ def auto_run_until_target(
         'remaining_records': max(0, read_target_from_task() - final_count),
         'max_rounds': max_rounds,
         'max_no_progress_rounds': max_no_progress_rounds,
+        'cooldown_seconds': cooldown_seconds,
+        'cooldown_max_seconds': cooldown_max_seconds,
         'resume_first_round': resume_first_round,
         'max_reasonable_page': max_reasonable_page,
         'fallback_page': fallback_page,
@@ -700,6 +723,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--max-rounds', type=int, default=100)
     parser.add_argument('--max-no-progress-rounds', type=int, default=3)
     parser.add_argument('--sleep-seconds', type=int, default=5)
+    parser.add_argument(
+        '--cooldown-seconds',
+        type=int,
+        default=int(os.environ.get('BROWSER_USE_COOLDOWN_SECONDS', '60')),
+        help='某一轮无新增（疑似被反爬限流）时的基础冷却秒数，按连续无进展轮次指数递增；<=0 表示沿用 --sleep-seconds',
+    )
+    parser.add_argument(
+        '--cooldown-max-seconds',
+        type=int,
+        default=int(os.environ.get('BROWSER_USE_COOLDOWN_MAX_SECONDS', '600')),
+        help='自适应冷却的上限秒数',
+    )
+    parser.add_argument(
+        '--page-delay-seconds',
+        type=float,
+        default=float(os.environ.get('BROWSER_USE_PAGE_DELAY_SECONDS', '0')),
+        help='每页批量下载前的节流延时秒数，降低触发 Cloudflare 限流概率；传给子进程的 BROWSER_USE_PAGE_DELAY_SECONDS',
+    )
     parser.add_argument('--max-reasonable-page', type=int, default=200, help='超过该页码的断点会被视为异常跳页')
     parser.add_argument('--fallback-page', type=int, default=1, help='发现异常跳页且没有可靠续跑点时从该页重新开始')
     parser.add_argument(
@@ -717,6 +758,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     resume_choice = True if args.resume else False if args.new_run else None
+    # 让每页节流延时对子进程 main.py 生效（批量下载工具读取该环境变量）。
+    if args.page_delay_seconds and args.page_delay_seconds > 0:
+        os.environ['BROWSER_USE_PAGE_DELAY_SECONDS'] = str(args.page_delay_seconds)
     resume_first_round = configure_before_run(
         args.cache_dir,
         resume_choice=resume_choice,
@@ -729,6 +773,8 @@ def main() -> int:
         max_rounds=args.max_rounds,
         max_no_progress_rounds=args.max_no_progress_rounds,
         sleep_seconds=args.sleep_seconds,
+        cooldown_seconds=args.cooldown_seconds,
+        cooldown_max_seconds=args.cooldown_max_seconds,
         max_reasonable_page=args.max_reasonable_page,
         fallback_page=args.fallback_page,
         round_timeout=args.round_timeout,

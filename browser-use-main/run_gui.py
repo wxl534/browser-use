@@ -87,6 +87,9 @@ class RunnerGUI:
         self.var_round_timeout = tk.StringVar(value='0')
         self.var_max_no_progress = tk.StringVar(value='3')
         self.var_sleep = tk.StringVar(value='5')
+        self.var_page_delay = tk.StringVar(value='0')
+        self.var_cooldown = tk.StringVar(value='60')
+        self.var_concurrency = tk.StringVar(value='3')
         self.var_api_key = tk.StringVar(value=os.environ.get('OPENAI_API_KEY', ''))
         self.var_base_url = tk.StringVar(value=os.environ.get('OPENAI_BASE_URL', DEFAULT_BASE_URL))
         self.var_python = tk.StringVar(value=sys.executable)
@@ -110,10 +113,13 @@ class RunnerGUI:
         row(2, '单轮超时(秒,0不限)', self.var_round_timeout, col=0, width=12)
         row(2, '连续无进展上限', self.var_max_no_progress, col=2, width=12)
         row(3, '轮间隔(秒)', self.var_sleep, col=0, width=12)
+        row(3, '每页节流(秒)', self.var_page_delay, col=2, width=12)
+        row(4, '限流冷却基数(秒)', self.var_cooldown, col=0, width=12)
+        row(4, '图片并发数', self.var_concurrency, col=2, width=12)
 
-        row(4, 'OPENAI_API_KEY', self.var_api_key, show='*', col=0, width=42)
-        row(5, 'OPENAI_BASE_URL', self.var_base_url, col=0, width=42)
-        row(6, 'Python 解释器', self.var_python, col=0, width=42)
+        row(5, 'OPENAI_API_KEY', self.var_api_key, show='*', col=0, width=42)
+        row(6, 'OPENAI_BASE_URL', self.var_base_url, col=0, width=42)
+        row(7, 'Python 解释器', self.var_python, col=0, width=42)
 
         btns = ttk.Frame(self.root)
         btns.pack(fill='x', padx=10, pady=(0, 4))
@@ -198,7 +204,10 @@ class RunnerGUI:
         round_timeout = as_int(self.var_round_timeout, '单轮超时', 0)
         max_no_progress = as_int(self.var_max_no_progress, '连续无进展上限', 1)
         sleep_seconds = as_int(self.var_sleep, '轮间隔', 0)
-        if None in (target, max_rounds, round_timeout, max_no_progress, sleep_seconds):
+        page_delay = as_int(self.var_page_delay, '每页节流', 0)
+        cooldown = as_int(self.var_cooldown, '限流冷却基数', 0)
+        concurrency = as_int(self.var_concurrency, '图片并发数', 1)
+        if None in (target, max_rounds, round_timeout, max_no_progress, sleep_seconds, page_delay, cooldown, concurrency):
             return None
 
         python_path = self.var_python.get().strip() or sys.executable
@@ -213,6 +222,9 @@ class RunnerGUI:
             'round_timeout': round_timeout,
             'max_no_progress': max_no_progress,
             'sleep_seconds': sleep_seconds,
+            'page_delay': page_delay,
+            'cooldown': cooldown,
+            'concurrency': concurrency,
             'python': python_path,
         }
 
@@ -231,6 +243,8 @@ class RunnerGUI:
             '--round-timeout', str(cfg['round_timeout']),
             '--max-no-progress-rounds', str(cfg['max_no_progress']),
             '--sleep-seconds', str(cfg['sleep_seconds']),
+            '--page-delay-seconds', str(cfg['page_delay']),
+            '--cooldown-seconds', str(cfg['cooldown']),
             ('--resume' if self.var_mode.get() == 'resume' else '--new-run'),
         ]
 
@@ -245,6 +259,7 @@ class RunnerGUI:
         env['PYTHONUNBUFFERED'] = '1'
         # supervisor 由前端托管，子进程不再自行监听 stdin。
         env['BROWSER_USE_DISABLE_INPUT_MONITOR'] = '1'
+        env['BROWSER_USE_IMAGE_DOWNLOAD_CONCURRENCY'] = str(cfg['concurrency'])
 
         try:
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0

@@ -610,6 +610,9 @@ async def run_idp_resume_preflight(
     """
     断点续跑时由代码先完成第一组确定性动作，避免依赖 Agent 记住 prompt。
     """
+    # 续跑预检在 Agent 启动浏览器之前运行，必须先确保浏览器会话已连接，
+    # 否则 navigate/CDP 调用会因 Root CDP client 未初始化而断言失败。start() 幂等。
+    await browser.start()
     active = sync_idp_progress_from_page_queue(run_dir, target_image_count, search_keyword)
     page = int(active.get('page') or 1)
     start_index = int(active.get('next_index') or 0)

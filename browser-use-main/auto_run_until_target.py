@@ -220,7 +220,7 @@ def _replace_whole_word(text: str, old: str, new: str) -> str:
     import re
     if not old or old == new:
         return text
-    pattern = r'(?<!\w)' + re.escape(old) + r'(?!\w)'
+    pattern = r'(?<![0-9A-Za-z])' + re.escape(old) + r'(?![0-9A-Za-z])'
     return re.sub(pattern, lambda _m: new, text)
 
 

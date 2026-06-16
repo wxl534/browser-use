@@ -336,31 +336,33 @@ def test_task_md_content():
     else:
         results.fail('task.md 图片数量', '未明确要求目标图片数量')
 
-    if 'china buddhist' in task_content:
-        results.ok('task.md 明确使用 china buddhist 搜索词')
+    from main import extract_search_keyword
+    search_keyword = extract_search_keyword(task_content, default='')
+    if search_keyword and search_keyword in task_content:
+        results.ok(f'task.md 明确使用搜索词: {search_keyword}')
     else:
-        results.fail('task.md 搜索词', '未明确使用 china buddhist')
+        results.fail('task.md 搜索词', '未明确使用当前任务搜索词')
 
     if 'image_record.jsonl' in task_content and 'temple_photo_info.md' in task_content:
         results.ok('task.md 明确结构化记录和信息表')
     else:
         results.fail('task.md 结构化记录', '缺少 image_record.jsonl 或 temple_photo_info.md')
 
-    if '不要调用 LOC 专用工具' in task_content and 'select_download_format' in task_content:
-        results.ok('task.md 明确禁止 LOC 专用工具')
+    legacy_loc_tools = ['select_download_format', 'collect_loc_result_queue', 'get_next_loc_queue_item']
+    if not any(tool_name in task_content for tool_name in legacy_loc_tools):
+        results.ok('task.md 不引用 legacy LOC 专用工具')
     else:
-        results.fail('task.md LOC 规则', '未明确禁止 LOC 专用工具')
+        results.fail('task.md LOC 规则', '仍引用 legacy LOC 专用工具')
 
     if '不要使用 `evaluate(code="自定义工具(...)")`' in task_content:
         results.ok('task.md 明确禁止 evaluate 调自定义工具')
     else:
         results.fail('task.md evaluate 规则', '未明确禁止 evaluate 调自定义工具')
 
-    from main import is_loc_download_task
-    if not is_loc_download_task(task_content):
-        results.ok('当前 IDP task 不会被误判为 LOC 任务')
+    if 'idp.bl.uk' in task_content and 'navigate_idp_search_page' in task_content:
+        results.ok('当前 task 明确是 IDP 批量下载任务')
     else:
-        results.fail('LOC 任务识别', 'IDP task 被误判为 LOC 任务')
+        results.fail('IDP 任务识别', '当前 task 缺少 IDP 下载任务标识')
 
 
 # ------ 4. tools_registry 路径安全测试 ------
@@ -399,70 +401,38 @@ def test_tools_registered():
 
     # registry.registry.actions 是一个 dict，key 为 action 名称
     action_names = list(registry.registry.actions.keys())
-    if 'extract_page_to_markdown' in action_names:
-        results.ok('extract_page_to_markdown 已注册')
-    else:
-        results.fail('工具注册', f'未找到，已注册: {action_names}')
+    required_actions = [
+        'extract_page_to_markdown',
+        'wait_for_human_verification',
+        'record_downloaded_image',
+        'validate_download_completion',
+        'finish_download_task',
+        'navigate_idp_search_page',
+        'download_current_idp_search_page_images',
+        'download_image_from_url',
+    ]
+    for action_name in required_actions:
+        if action_name in action_names:
+            results.ok(f'{action_name} 已注册')
+        else:
+            results.fail('工具注册', f'未找到 {action_name}，已注册: {action_names}')
 
-    if 'select_download_format' in action_names:
-        results.ok('select_download_format 已注册')
+    legacy_actions = [
+        'select_download_format',
+        'collect_loc_result_queue',
+        'get_next_loc_queue_item',
+        'mark_loc_queue_item',
+        'rebuild_loc_download_state',
+        'download_kyohaku_image',
+        'download_current_kyohaku_item_images',
+        'save_kyohaku_image_via_browser',
+        'clean_kyohaku_screenshot',
+    ]
+    unexpected_legacy = [action_name for action_name in legacy_actions if action_name in action_names]
+    if not unexpected_legacy:
+        results.ok('legacy LOC/Kyohaku 工具默认不注册')
     else:
-        results.fail('工具注册', f'未找到 select_download_format，已注册: {action_names}')
-
-    if 'collect_loc_result_queue' in action_names:
-        results.ok('collect_loc_result_queue 已注册')
-    else:
-        results.fail('工具注册', f'未找到 collect_loc_result_queue，已注册: {action_names}')
-
-    if 'record_downloaded_image' in action_names:
-        results.ok('record_downloaded_image 已注册')
-    else:
-        results.fail('工具注册', f'未找到 record_downloaded_image，已注册: {action_names}')
-
-    if 'download_current_idp_search_page_images' in action_names:
-        results.ok('download_current_idp_search_page_images 已注册')
-    else:
-        results.fail('工具注册', f'未找到 download_current_idp_search_page_images，已注册: {action_names}')
-
-    if 'download_kyohaku_image' in action_names:
-        results.ok('download_kyohaku_image 已注册')
-    else:
-        results.fail('工具注册', f'未找到 download_kyohaku_image，已注册: {action_names}')
-
-    if 'download_current_kyohaku_item_images' in action_names:
-        results.ok('download_current_kyohaku_item_images 已注册')
-    else:
-        results.fail('工具注册', f'未找到 download_current_kyohaku_item_images，已注册: {action_names}')
-
-    if 'save_kyohaku_image_via_browser' in action_names:
-        results.ok('save_kyohaku_image_via_browser 已注册')
-    else:
-        results.fail('工具注册', f'未找到 save_kyohaku_image_via_browser，已注册: {action_names}')
-
-    if 'clean_kyohaku_screenshot' in action_names:
-        results.ok('clean_kyohaku_screenshot 已注册')
-    else:
-        results.fail('工具注册', f'未找到 clean_kyohaku_screenshot，已注册: {action_names}')
-
-    if 'get_next_loc_queue_item' in action_names:
-        results.ok('get_next_loc_queue_item 已注册')
-    else:
-        results.fail('工具注册', f'未找到 get_next_loc_queue_item，已注册: {action_names}')
-
-    if 'mark_loc_queue_item' in action_names:
-        results.ok('mark_loc_queue_item 已注册')
-    else:
-        results.fail('工具注册', f'未找到 mark_loc_queue_item，已注册: {action_names}')
-
-    if 'wait_for_human_verification' in action_names:
-        results.ok('wait_for_human_verification 已注册')
-    else:
-        results.fail('工具注册', f'未找到 wait_for_human_verification，已注册: {action_names}')
-
-    if 'rebuild_loc_download_state' in action_names:
-        results.ok('rebuild_loc_download_state 已注册')
-    else:
-        results.fail('工具注册', f'未找到 rebuild_loc_download_state，已注册: {action_names}')
+        results.fail('legacy 工具注册', f'默认注册了已退役工具: {unexpected_legacy}')
 
 
 def test_plain_border_trimming():

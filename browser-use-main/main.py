@@ -22,6 +22,8 @@ from idp_page_progress import select_next_page
 from tools_registry import (
     DownloadCurrentIdpSearchPageImagesParams,
     NavigateIdpSearchPageParams,
+    _attempt_cloudflare_autoclick,
+    _detect_human_verification,
     configure_runtime_paths,
     download_current_idp_search_page_images,
     format_download_validation_report,
@@ -627,6 +629,28 @@ async def run_idp_resume_preflight(
         return
     if navigate_result.extracted_content:
         print(navigate_result.extracted_content)
+
+    # 续跑落到搜索页后常见 Cloudflare 挑战页：先尝试自动点击通过，失败则交给 Agent（可人工解）。
+    try:
+        challenge = await _detect_human_verification(browser)
+        if challenge.get('is_challenge'):
+            print("🛡️ 检测到 Cloudflare/人机验证页，尝试自动点击通过…")
+            solved = await _attempt_cloudflare_autoclick(browser, attempts=3)
+            if solved:
+                print("✅ 已自动点击通过人机验证，继续预执行批量下载。")
+                navigate_result = await navigate_idp_search_page(
+                    params=NavigateIdpSearchPageParams(keyword=search_keyword, page=page, limit=50),
+                    browser_session=browser,
+                )
+                if navigate_result.error:
+                    print(f"⚠️ 验证通过后重导航失败，交给 Agent 处理：{navigate_result.error}")
+                    return
+            else:
+                print("⚠️ 自动点击未能通过人机验证（可能是交互式挑战），交给 Agent / 人工处理。")
+                return
+    except Exception as verify_exc:
+        print(f"⚠️ 人机验证自动处理出错，交给 Agent 处理：{verify_exc}")
+        return
 
     batch_result = await download_current_idp_search_page_images(
         params=DownloadCurrentIdpSearchPageImagesParams(

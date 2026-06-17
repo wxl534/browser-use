@@ -144,6 +144,8 @@ class WaitForHumanVerificationParams(BaseModel):
     """等待人工完成人机验证的参数模型"""
     timeout_seconds: int = Field(default=180, ge=1, le=900, description='最多等待人工完成验证的秒数')
     poll_interval_seconds: int = Field(default=5, ge=1, le=30, description='检查页面是否恢复的间隔秒数')
+    auto_click: bool = Field(default=True, description='是否先尝试自动点击 Cloudflare/Turnstile 复选框；失败再回退人工等待')
+    auto_click_attempts: int = Field(default=3, ge=1, le=10, description='自动点击的最大尝试轮数')
 
 
 class RebuildLocDownloadStateParams(BaseModel):
@@ -2209,6 +2211,129 @@ async def _detect_human_verification(browser_session) -> dict:
     return result.get('result', {}).get('value') or {}
 
 
+async def _collect_verification_click_targets(browser_session) -> dict:
+    """
+    收集页面上可能承载 Cloudflare/Turnstile 复选框的元素矩形（视口 CSS 像素坐标）。
+
+    Turnstile 复选框位于跨域 iframe（challenges.cloudflare.com）内，顶层文档无法用
+    querySelector 穿透；因此这里只取容器 iframe / 小部件 / 顶层 checkbox 的矩形，
+    具体点击点由调用方推算，再用 CDP Input.dispatchMouseEvent 在该坐标派发可信点击。
+    """
+    js_code = r'''
+    (function() {
+        const targets = [];
+        const push = (el, kind) => {
+            if (!el) return;
+            const r = el.getBoundingClientRect();
+            if (r.width < 4 || r.height < 4) return;
+            if (r.bottom < 0 || r.right < 0) return;
+            targets.push({kind, x: r.x, y: r.y, width: r.width, height: r.height});
+        };
+        document.querySelectorAll(
+            'iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"], '
+            + 'iframe[title*="challenge" i], iframe[title*="Cloudflare" i], iframe[title*="verify" i]'
+        ).forEach(f => push(f, 'cf_iframe'));
+        document.querySelectorAll('.cf-turnstile, #challenge-stage, [class*="turnstile" i]').forEach(d => push(d, 'cf_widget'));
+        document.querySelectorAll('input[type="checkbox"]').forEach(c => push(c, 'checkbox'));
+        return {targets, vw: window.innerWidth, vh: window.innerHeight};
+    })()
+    '''
+    cdp_session = await browser_session.get_or_create_cdp_session()
+    result = await cdp_session.cdp_client.send.Runtime.evaluate(
+        params={'expression': js_code, 'returnByValue': True, 'awaitPromise': True},
+        session_id=cdp_session.session_id,
+    )
+    if result.get('exceptionDetails'):
+        raise RuntimeError(result['exceptionDetails'].get('text', '定位验证控件失败'))
+    return result.get('result', {}).get('value') or {}
+
+
+def _verification_click_points(targets_info: dict) -> list[tuple[float, float]]:
+    """
+    把矩形列表转换成一组按优先级排序的候选点击坐标。
+
+    - 顶层 checkbox：直接点中心。
+    - 小尺寸 Turnstile 小部件/iframe（典型 ~300x65）：复选框在左侧，点 (left+~30, 垂直中心)。
+    - 大尺寸全屏挑战 iframe：复选框通常在左上区域，按经验点 (left+45, top+55)，并补一个中心点兜底。
+    """
+    points: list[tuple[float, float]] = []
+    seen: set[tuple[int, int]] = set()
+
+    def add(x: float, y: float) -> None:
+        key = (round(x), round(y))
+        if key in seen:
+            return
+        seen.add(key)
+        points.append((x, y))
+
+    targets = targets_info.get('targets') or []
+    # checkbox 优先级最高
+    for t in sorted(targets, key=lambda t: 0 if t.get('kind') == 'checkbox' else 1):
+        x, y, w, h = t.get('x', 0), t.get('y', 0), t.get('width', 0), t.get('height', 0)
+        kind = t.get('kind')
+        if kind == 'checkbox':
+            add(x + w / 2, y + h / 2)
+        elif w <= 600 and h <= 160:
+            add(x + min(34, w * 0.12), y + h / 2)
+        else:
+            add(x + 45, y + 55)
+            add(x + w / 2, y + h / 2)
+    return points
+
+
+async def _cdp_click_point(browser_session, x: float, y: float) -> None:
+    """用 CDP Input.dispatchMouseEvent 在视口坐标 (x, y) 派发一次可信左键点击。
+
+    CDP 输入事件带 isTrusted=true，可穿透跨域 iframe 边界，满足 Turnstile 对用户手势的要求。
+    """
+    cdp_session = await browser_session.get_or_create_cdp_session()
+    client = cdp_session.cdp_client
+    sid = cdp_session.session_id
+    await client.send.Input.dispatchMouseEvent(
+        params={'type': 'mouseMoved', 'x': x, 'y': y}, session_id=sid
+    )
+    await asyncio.sleep(0.12)
+    await client.send.Input.dispatchMouseEvent(
+        params={'type': 'mousePressed', 'x': x, 'y': y, 'button': 'left', 'buttons': 1, 'clickCount': 1},
+        session_id=sid,
+    )
+    await asyncio.sleep(0.07)
+    await client.send.Input.dispatchMouseEvent(
+        params={'type': 'mouseReleased', 'x': x, 'y': y, 'button': 'left', 'buttons': 1, 'clickCount': 1},
+        session_id=sid,
+    )
+
+
+async def _attempt_cloudflare_autoclick(browser_session, *, attempts: int, settle_seconds: float = 3.0) -> bool:
+    """尝试自动点击 Cloudflare/Turnstile 复选框；挑战消失返回 True，否则 False。
+
+    仅能处理"单击放行"型 managed challenge；交互式拼图类无法自动解，会回退人工。
+    """
+    for _ in range(attempts):
+        state = await _detect_human_verification(browser_session)
+        if not state.get('is_challenge'):
+            return True
+        try:
+            targets_info = await _collect_verification_click_targets(browser_session)
+        except RuntimeError:
+            targets_info = {}
+        points = _verification_click_points(targets_info)
+        if not points:
+            # 找不到可点控件（可能 iframe 尚未渲染），等待后重试。
+            await asyncio.sleep(settle_seconds)
+            continue
+        for (x, y) in points:
+            try:
+                await _cdp_click_point(browser_session, x, y)
+            except Exception:
+                continue
+            await asyncio.sleep(settle_seconds)
+            after = await _detect_human_verification(browser_session)
+            if not after.get('is_challenge'):
+                return True
+    return False
+
+
 # === 注册自定义动作 ===
 
 @legacy_tools_action(
@@ -2627,12 +2752,12 @@ async def mark_kyohaku_queue_item(params: MarkKyohakuQueueItemParams):
 
 
 @tools.action(
-    description='检测当前页面是否为 Cloudflare/人机验证页；如果是，则等待用户在浏览器中手动完成验证后再继续。不会自动点击或绕过验证码。',
+    description='检测当前页面是否为 Cloudflare/人机验证页；如果是，先尝试用 CDP 自动点击 Turnstile 复选框（仅对“单击放行”型有效），失败再等待用户在浏览器中手动完成验证后继续。',
     param_model=WaitForHumanVerificationParams,
 )
 async def wait_for_human_verification(params: WaitForHumanVerificationParams, browser_session):
     """
-    人机验证必须由用户手动完成；本工具只负责检测和等待，避免 agent 继续误操作。
+    优先自动点击 Cloudflare/Turnstile 复选框；无法自动通过（如交互式拼图）时回退人工等待。
     """
     try:
         deadline = asyncio.get_running_loop().time() + params.timeout_seconds
@@ -2640,6 +2765,24 @@ async def wait_for_human_verification(params: WaitForHumanVerificationParams, br
         if not first_state.get('is_challenge'):
             msg = '✅ 当前页面未检测到 Cloudflare/人机验证，可以继续执行。'
             return ActionResult(extracted_content=msg, include_in_memory=True, long_term_memory='当前页面未检测到人机验证')
+
+        auto_clicked = False
+        if params.auto_click:
+            auto_clicked = await _attempt_cloudflare_autoclick(
+                browser_session, attempts=params.auto_click_attempts
+            )
+            if auto_clicked:
+                state = await _detect_human_verification(browser_session)
+                msg = (
+                    '✅ 已自动点击通过 Cloudflare/人机验证，页面已恢复，可以继续处理队列。\n'
+                    f"当前页面: {state.get('url', '')}\n"
+                    f"标题: {state.get('title', '')}"
+                )
+                return ActionResult(
+                    extracted_content=msg,
+                    include_in_memory=True,
+                    long_term_memory='人机验证已自动点击通过，可以继续任务',
+                )
 
         while asyncio.get_running_loop().time() < deadline:
             await asyncio.sleep(params.poll_interval_seconds)
@@ -2653,11 +2796,12 @@ async def wait_for_human_verification(params: WaitForHumanVerificationParams, br
                 return ActionResult(
                     extracted_content=msg,
                     include_in_memory=True,
-                    long_term_memory='人机验证已由用户手动完成，可以继续任务',
+                    long_term_memory='人机验证已完成，可以继续任务',
                 )
 
         msg = (
-            '仍处于 Cloudflare/人机验证页面。请在打开的浏览器中手动点击验证按钮并等待页面加载完成，'
+            '仍处于 Cloudflare/人机验证页面（自动点击未能通过，可能是交互式挑战）。'
+            '请在打开的浏览器中手动点击验证按钮并等待页面加载完成，'
             '然后再次调用 wait_for_human_verification 或继续当前队列项。\n'
             f"页面: {first_state.get('url', '')}\n"
             f"标题: {first_state.get('title', '')}\n"

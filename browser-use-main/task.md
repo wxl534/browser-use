@@ -167,13 +167,20 @@ temple_photo_info.md
 2. 图片只显示为很小的缩略图，无法打开大图。
 3. 图片保存失败，重试 1 次仍失败。
 4. 同一详情页 URL、同一 manifest URL、同一图片 URL、同一图片内容或断点续跑上下文中列出的任一记录已经处理过。
-5. 页面需要登录、付费或出现人机验证。
+5. 页面需要登录或付费。（遇到 Cloudflare / 人机验证页**不要直接跳过**，见下方"人机验证处理"专门说明。）
 6. 页面明显与关键词 `miao` 或中国佛教语境无关。
 7. 连续出现 `browser not connected`、`No valid agent focus available`、`target may have detached` 或空白 SPA 页面时，不要继续循环恢复；调用 `done` 报告需要重启浏览器会话，并保留已下载记录。
 8. 当 `download_current_idp_search_page_images` 返回的错误以 `[idp_session_corrupted]`、`[idp_extract_failed]`、`[idp_empty_page]` 或 `[idp_batch_unhandled_error]` 开头，**禁止再调用批量工具、navigate_idp_search_page 之外的任何浏览器操作来"绕过"**；必须立刻调用 `finish_download_task` 结束本次会话，最终数字由 `image_record.jsonl` / `idp_progress.json` 决定。
 9. **禁止"手动 fallback"**：批量工具失败后，不允许通过点击 `/collection/<id>/` 详情页链接、打开 IIIF manifest 新 tab、用 `evaluate` 扫 DOM 的方式自行下载图片。手动方式会污染浏览器上下文，反过来让批量工具持续报 JS 异常。
 
-如果遇到人机验证，不要自动绕过，只在最终结果中报告需要人工处理。
+## 人机验证处理
+
+遇到 Cloudflare / 人机验证页（页面出现 "Verify you are human" / "Just a moment" / cf-chl-widget / turnstile 等）时，**必须立刻调用 `wait_for_human_verification`**，不要自己反复 `wait` 干等，也不要直接判定"无法绕过"而结束任务。
+
+- `wait_for_human_verification` 会先用 CDP 自动点击 Turnstile 复选框尝试通过；自动点击对"单击放行"型验证通常有效。
+- 若工具返回成功（页面已恢复），继续按断点续跑上下文调用 `navigate_idp_search_page` 和 `download_current_idp_search_page_images`。
+- 若工具返回仍未通过（多为交互式拼图类），它已等待过人工处理时间；此时才在最终结果中报告需要人工处理。
+- 同一会话内可多次调用 `wait_for_human_verification`，不要只试一次就放弃。
 
 ## 明确禁止
 
@@ -197,7 +204,7 @@ temple_photo_info.md
 
 1. 已成功保存 5000 张与关键词 `miao` 相关的图片，并完成 `title.txt` 与 `temple_photo_info.md`。
 2. 已处理完所有搜索结果页，但不足 5000 张；报告实际保存数量、跳过原因和未完成原因。
-3. 网站无法访问、数据库不可用或遇到必须人工处理的人机验证。
+3. 网站无法访问、数据库不可用，或人机验证经 `wait_for_human_verification`（含自动点击与人工等待）多次尝试仍无法通过。
 
 如果 `validate_download_completion` 显示 `Final download validation: INCOMPLETE` 且 `remaining_records_needed` 大于 0，不要结束任务，继续扫描后续搜索结果并下载新图片。只有校验报告显示 `Final download validation: SUCCESS`，或已经确认所有搜索结果处理完/网站不可继续访问，才调用 `finish_download_task`。
 

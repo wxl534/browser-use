@@ -93,6 +93,11 @@ class RunnerGUI:
         self.var_api_key = tk.StringVar(value=os.environ.get('OPENAI_API_KEY', ''))
         self.var_base_url = tk.StringVar(value=os.environ.get('OPENAI_BASE_URL', DEFAULT_BASE_URL))
         self.var_python = tk.StringVar(value=sys.executable)
+        # 反爬：真实 Chrome profile + 可选代理（绕过 Cloudflare 人机验证）
+        self.var_chrome_exe = tk.StringVar(value=os.environ.get('IDP_CHROME_EXECUTABLE', ''))
+        self.var_chrome_user_data = tk.StringVar(value=os.environ.get('IDP_CHROME_USER_DATA_DIR', ''))
+        self.var_chrome_profile = tk.StringVar(value=os.environ.get('IDP_CHROME_PROFILE_DIRECTORY', 'Default'))
+        self.var_proxy_server = tk.StringVar(value=os.environ.get('IDP_PROXY_SERVER', ''))
 
         def row(r: int, label: str, var: tk.StringVar, *, show: str | None = None, col: int = 0, width: int = 24):
             ttk.Label(frm, text=label).grid(row=r, column=col, sticky='w', padx=6, pady=4)
@@ -120,6 +125,10 @@ class RunnerGUI:
         row(5, 'OPENAI_API_KEY', self.var_api_key, show='*', col=0, width=42)
         row(6, 'OPENAI_BASE_URL', self.var_base_url, col=0, width=42)
         row(7, 'Python 解释器', self.var_python, col=0, width=42)
+        row(8, '真实Chrome路径(可选)', self.var_chrome_exe, col=0, width=42)
+        row(9, 'Chrome用户数据目录(可选)', self.var_chrome_user_data, col=0, width=42)
+        row(10, 'Chrome profile名', self.var_chrome_profile, col=0, width=42)
+        row(11, '代理服务器(可选)', self.var_proxy_server, col=0, width=42)
 
         btns = ttk.Frame(self.root)
         btns.pack(fill='x', padx=10, pady=(0, 4))
@@ -226,6 +235,10 @@ class RunnerGUI:
             'cooldown': cooldown,
             'concurrency': concurrency,
             'python': python_path,
+            'chrome_exe': self.var_chrome_exe.get().strip(),
+            'chrome_user_data': self.var_chrome_user_data.get().strip(),
+            'chrome_profile': self.var_chrome_profile.get().strip() or 'Default',
+            'proxy_server': self.var_proxy_server.get().strip(),
         }
 
     def on_start(self) -> None:
@@ -260,6 +273,15 @@ class RunnerGUI:
         # supervisor 由前端托管，子进程不再自行监听 stdin。
         env['BROWSER_USE_DISABLE_INPUT_MONITOR'] = '1'
         env['BROWSER_USE_IMAGE_DOWNLOAD_CONCURRENCY'] = str(cfg['concurrency'])
+        # 反爬：真实 Chrome profile + 可选代理（main.py 的 build_browser 读取这些环境变量）。
+        if cfg['chrome_exe']:
+            env['IDP_CHROME_EXECUTABLE'] = cfg['chrome_exe']
+        if cfg['chrome_user_data']:
+            env['IDP_CHROME_USER_DATA_DIR'] = cfg['chrome_user_data']
+        if cfg['chrome_profile']:
+            env['IDP_CHROME_PROFILE_DIRECTORY'] = cfg['chrome_profile']
+        if cfg['proxy_server']:
+            env['IDP_PROXY_SERVER'] = cfg['proxy_server']
 
         try:
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0

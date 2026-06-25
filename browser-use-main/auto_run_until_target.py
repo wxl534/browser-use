@@ -749,6 +749,33 @@ def parse_args() -> argparse.Namespace:
         default=int(os.environ.get('BROWSER_USE_ROUND_TIMEOUT', '0')),
         help='单轮 main.py 的最长运行秒数，超时判定卡死并清理进程树；<=0 表示不限制',
     )
+    # === 反爬：真实 Chrome profile + 可选代理（绕过 Cloudflare 人机验证）===
+    # Cloudflare Turnstile 主要按后台指纹 + IP 信誉判定，而非"点击复选框"本身。
+    # 用带真实 cookie/cf_clearance 的 Chrome profile 出场可让目标站静默放行。
+    parser.add_argument(
+        '--chrome-executable',
+        type=str,
+        default=os.environ.get('IDP_CHROME_EXECUTABLE', ''),
+        help='真实 Chrome 可执行文件路径（与 --chrome-user-data-dir 同时设置才启用真实 Chrome）',
+    )
+    parser.add_argument(
+        '--chrome-user-data-dir',
+        type=str,
+        default=os.environ.get('IDP_CHROME_USER_DATA_DIR', ''),
+        help='真实 Chrome 用户数据目录（须先完全关闭该 Chrome，避免 profile 被占用）',
+    )
+    parser.add_argument(
+        '--chrome-profile-directory',
+        type=str,
+        default=os.environ.get('IDP_CHROME_PROFILE_DIRECTORY', 'Default'),
+        help="Chrome profile 子目录名（默认 'Default'）",
+    )
+    parser.add_argument(
+        '--proxy-server',
+        type=str,
+        default=os.environ.get('IDP_PROXY_SERVER', ''),
+        help='可选代理服务器，如 http://user:pass@host:port（攻击 Cloudflare 的 IP 信誉层）',
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--resume', action='store_true', help='第一轮从上次断点续跑')
     mode.add_argument('--new-run', action='store_true', help='第一轮归档旧 ImagesCache 并从头开始')
@@ -761,6 +788,15 @@ def main() -> int:
     # 让每页节流延时对子进程 main.py 生效（批量下载工具读取该环境变量）。
     if args.page_delay_seconds and args.page_delay_seconds > 0:
         os.environ['BROWSER_USE_PAGE_DELAY_SECONDS'] = str(args.page_delay_seconds)
+    # 透传真实 Chrome / 代理配置给子进程 main.py（build_browser 读取这些环境变量）。
+    if args.chrome_executable:
+        os.environ['IDP_CHROME_EXECUTABLE'] = args.chrome_executable
+    if args.chrome_user_data_dir:
+        os.environ['IDP_CHROME_USER_DATA_DIR'] = args.chrome_user_data_dir
+    if args.chrome_profile_directory:
+        os.environ['IDP_CHROME_PROFILE_DIRECTORY'] = args.chrome_profile_directory
+    if args.proxy_server:
+        os.environ['IDP_PROXY_SERVER'] = args.proxy_server
     resume_first_round = configure_before_run(
         args.cache_dir,
         resume_choice=resume_choice,

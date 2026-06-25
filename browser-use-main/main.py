@@ -14,6 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from browser_use import Agent, Browser, ChatOpenAI
+from browser_use.browser import ProxySettings
 from browser_use.llm.exceptions import ModelAuthBlockedError
 from browser_use.llm.messages import UserMessage
 from idp_page_progress import select_next_page
@@ -41,6 +42,86 @@ should_quit = False
 IMAGE_EXTENSIONS = ('*.tif', '*.tiff', '*.png', '*.jpg', '*.jpeg', '*.gif', '*.webp')
 LOG_ROTATE_THRESHOLD_BYTES = 50 * 1024 * 1024
 CACHE_BASE_NAME = 'ImagesCache'
+
+
+def _build_proxy_from_env() -> ProxySettings | None:
+    """从环境变量构造代理配置（攻击 Cloudflare 的 L1 IP 信誉层）。
+
+    住宅/移动代理可在 IP 被 Cloudflare 标记后换一个干净 IP，使信誉计数器清零。
+    仅当设置了 IDP_PROXY_SERVER 时启用，否则返回 None（直连，保持现有行为）。
+    """
+    server = os.environ.get('IDP_PROXY_SERVER', '').strip()
+    if not server:
+        return None
+    return ProxySettings(
+        server=server,
+        bypass=os.environ.get('IDP_PROXY_BYPASS', '').strip() or None,
+        username=os.environ.get('IDP_PROXY_USERNAME', '').strip() or None,
+        password=os.environ.get('IDP_PROXY_PASSWORD', '').strip() or None,
+    )
+
+
+def build_browser(image_dir) -> Browser:
+    """构造 Browser 实例，优先使用真实 Chrome profile 以绕过 Cloudflare 人机验证。
+
+    Cloudflare Turnstile 的判定主要发生在后台指纹 + IP 信誉层，而非"点击复选框"本身。
+    用真实 Chrome（带真实 cookie/历史/cf_clearance 的 user_data_dir）出场，指纹与信誉
+    双过关后，目标网站通常会静默放行、甚至不弹验证页——这是不花钱、最可能见效的方案。
+
+    通过环境变量配置（不设置则完全回退到原 Chromium + 本地 browser_profile 行为）：
+      - IDP_CHROME_EXECUTABLE：真实 Chrome 可执行文件路径
+          (Windows 默认: C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe)
+      - IDP_CHROME_USER_DATA_DIR：真实 Chrome 用户数据目录
+          (Windows 默认: %LOCALAPPDATA%\\Google\\Chrome\\User Data)
+      - IDP_CHROME_PROFILE_DIRECTORY：profile 子目录名（默认 'Default'）
+      - IDP_PROXY_SERVER 等：可选住宅代理（见 _build_proxy_from_env）
+
+    注意：使用真实 Chrome 的 user_data_dir 前，必须先完全关闭 Chrome，否则会因
+    profile 被占用而启动失败。建议为爬虫单独建一个已登录过目标站点的 profile 目录。
+    """
+    proxy = _build_proxy_from_env()
+
+    executable_path = os.environ.get('IDP_CHROME_EXECUTABLE', '').strip()
+    user_data_dir = os.environ.get('IDP_CHROME_USER_DATA_DIR', '').strip()
+
+    use_real_chrome = bool(executable_path and user_data_dir)
+    if use_real_chrome and not Path(executable_path).exists():
+        print(f"⚠️  IDP_CHROME_EXECUTABLE 指向的文件不存在：{executable_path}，回退到内置 Chromium")
+        use_real_chrome = False
+
+    if use_real_chrome:
+        profile_directory = os.environ.get('IDP_CHROME_PROFILE_DIRECTORY', 'Default').strip() or 'Default'
+        print(
+            "🛡️  使用真实 Chrome profile 以绕过人机验证："
+            f"\n     executable_path={executable_path}"
+            f"\n     user_data_dir={user_data_dir}"
+            f"\n     profile_directory={profile_directory}"
+            + (f"\n     proxy={proxy.server}" if proxy else "")
+        )
+        print("     ⚠️  请确保已完全关闭该 Chrome，否则 profile 被占用会启动失败。")
+        return Browser(
+            executable_path=executable_path,
+            user_data_dir=user_data_dir,
+            profile_directory=profile_directory,
+            channel='chrome',
+            headless=False,
+            enable_default_extensions=False,
+            downloads_path=str(image_dir),
+            proxy=proxy,
+        )
+
+    # 回退：内置 Chromium + 项目内 browser_profile（与原行为一致）
+    if proxy:
+        print(f"🌐 使用代理（内置 Chromium）：{proxy.server}")
+    return Browser(
+        args=[
+            f'--user-data-dir={BASE_DIR / "browser_profile"}'
+        ],
+        headless=False,
+        enable_default_extensions=False,
+        downloads_path=str(image_dir),  # 下载文件保存到 image 目录
+        proxy=proxy,
+    )
 
 
 def rotate_large_logs(base_dir: Path, threshold_bytes: int = LOG_ROTATE_THRESHOLD_BYTES) -> Path | None:
@@ -987,14 +1068,7 @@ async def run_agent_once(resume_run_override: bool | None = None):
     if not api_key:
         raise ValueError('未设置 OPENAI_API_KEY，无法启动 Agent。请先在 .env 或环境变量中配置。')
 
-    browser = Browser(
-        args=[
-            f'--user-data-dir={BASE_DIR / "browser_profile"}'
-        ],
-        headless=False,
-        enable_default_extensions=False,
-        downloads_path=str(image_dir),  # 下载文件保存到 image 目录
-    )
+    browser = build_browser(image_dir)
 
     if resume_run:
         await run_idp_resume_preflight(

@@ -27,7 +27,7 @@
 4. 每个详情页可保存 1 张或多张可见馆藏图片；总数达到 5000 张后停止。
 5. 只保存馆藏图片，不保存 logo、按钮、Cookie 横幅、导航栏、社交分享图标、页面装饰图。
 6. 每成功保存一张图片后必须立刻最终命名并记录；优先用 `download_image_from_url` 自动找图、保存、hash 去重、最终命名并记录，只有图片已通过其他方式真实落地到 `image` 目录后，才单独调用 `record_downloaded_image`。
-7. `record_downloaded_image` 会计算 `content_hash` / `source_hash` / `title_hash`，把临时图片立即改为最终文件名，并自动维护 `browseruse_agent_data/image_record.jsonl`、`title.txt` 和 `temple_photo_info.md`。
+7. `record_downloaded_image` 会计算 `content_hash` / `source_hash` / `title_hash`，把临时图片立即改为最终文件名，并自动维护 `browseruse_agent_data/image_record.jsonl`、`browseruse_agent_data/title.txt` 和 `browseruse_agent_data/temple_photo_info.md`。
 8. `title.txt` 只是人工查看用的导出文件，不允许依赖它做最终重命名。
 9. 不要重复处理同一详情页 URL、同一图片 URL 或同一图片内容。
 

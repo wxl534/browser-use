@@ -108,12 +108,17 @@ def build_context(cfg: dict) -> dict:
     return ctx
 
 
-_IF_BLOCK = re.compile(r'\{\{#if (\w+)\}\}\n?(.*?)\{\{/if\}\}\n?', re.DOTALL)
+# 只匹配「最内层」if 块：块体内不得再含 {{#if 或 {{/if}}，配合下面的 while 循环
+# 从内向外逐层求值，从而真正支持嵌套（避免惰性 .*? 把外层 if 与内层 {{/if}} 错配）。
+_IF_BLOCK = re.compile(
+    r'\{\{#if (\w+)\}\}\n?((?:(?!\{\{#if |\{\{/if\}\}).)*?)\{\{/if\}\}\n?',
+    re.DOTALL,
+)
 _VAR = re.compile(r'\{\{\s*(\w+)\s*\}\}')
 
 
 def render(template: str, ctx: dict) -> str:
-    """极简模板引擎：先按 {{#if key}}..{{/if}} 取舍块（支持嵌套，循环到稳定），再做 {{ var }} 替换。"""
+    """极简模板引擎：先按 {{#if key}}..{{/if}} 取舍块（从内向外逐层、循环到稳定，支持嵌套），再做 {{ var }} 替换。"""
     def strip_blocks(text: str) -> str:
         def repl(match: re.Match) -> str:
             key, body = match.group(1), match.group(2)

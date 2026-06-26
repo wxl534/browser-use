@@ -1200,14 +1200,14 @@ def test_generic_image_record_workflow():
                 and record.get('content_hash')
                 and record.get('source_hash')
                 and record.get('title_hash')
-                and record.get('short_hash') in record.get('file_name', '')
+                and record.get('source_hash', '')[:8] in record.get('file_name', '')
             ):
                 results.ok('record_downloaded_image 生成信息表、JSONL 和 hash 字段')
             else:
                 results.fail('记录文件生成', '信息表或 JSONL 内容不完整')
 
             renamed = {path.name for path in run_dir.iterdir()}
-            if 'temple_001.png' not in renamed and any(name.startswith('寺_001_金堂・本尊_図1') and record.get('short_hash') in name and name.endswith('.png') for name in renamed):
+            if 'temple_001.png' not in renamed and any(name.startswith('寺_001_金堂・本尊_図1') and record.get('source_hash', '')[:8] in name and name.endswith('.png') for name in renamed):
                 results.ok('record_downloaded_image 会立即按 title + hash 最终命名 PNG')
             else:
                 results.fail('即时最终命名', f'得到 {renamed}, record={record}')

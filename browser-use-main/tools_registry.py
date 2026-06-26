@@ -834,28 +834,6 @@ def _source_hash(page_url: str, image_url: str, image_index: int = 0) -> str:
     return _hash_text(source_key, 'sha256')
 
 
-def _provisional_image_stem(source_hash: str) -> str:
-    """
-    下载阶段的临时文件名 = 图片与其来源信息的共有 hash（source_hash）。
-
-    source_hash 由 (page_url, image_url, index) 派生，等于"这张图 + 它对应信息"的
-    共有指纹。下载落地的瞬间文件名就被它唯一绑定，命名前不会与别的 item 混淆，
-    随后立刻据此 hash 对应的信息重命名为最终名，确保图片与信息严格对应。
-
-    返回裸 64 位十六进制（无业务前缀），既忠实表达"临时名即共有 hash"，也便于把
-    未完成最终命名的孤儿文件一眼识别出来（最终名形如 ``NNN_标题_8位hash``）。
-    """
-    normalized = (source_hash or '').strip().lower()
-    if re.fullmatch(r'[0-9a-f]{64}', normalized):
-        return normalized
-    return _hash_text(normalized or 'provisional', 'sha256')
-
-
-def _is_provisional_image_stem(stem: str) -> bool:
-    """裸 64 位十六进制文件名即"已下载但尚未完成最终命名"的临时/孤儿文件。"""
-    return bool(re.fullmatch(r'[0-9a-f]{64}', (stem or '').strip().lower()))
-
-
 def _source_item_id_from_urls(page_url: str, image_url: str = '') -> str:
     """从 URL 提取站内 item id：优先用站点 hint，无则用通用兜底（URL 路径末段）。"""
     site_id = _site_item_id_from_urls(page_url, image_url)

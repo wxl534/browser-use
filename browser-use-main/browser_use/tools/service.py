@@ -2041,19 +2041,25 @@ Context: {context}"""
 		)
 		async def evaluate(code: str, browser_session: BrowserSession):
 			# Execute JavaScript with proper error handling and promise support
+			# 这些是本项目的自定义 Python tool action，不是浏览器 JS 函数。弱模型常误把它们
+			# 包进 evaluate() 当 JS 执行 → "Uncaught ReferenceError"，连续失败后放弃逐 item 流程
+			# 改为手动点击，严重拖慢下载。这里拦截并明确提示「作为独立 tool action 直接调用」，
+			# 让模型下一步立刻自我纠正。名称均不与任何 DOM/JS 内置 API 冲突。
 			custom_tool_pattern = (
-				r'\b(?:collect_loc_result_queue|get_next_loc_queue_item|mark_loc_queue_item|'
-				r'wait_for_human_verification|rebuild_loc_download_state|'
-				r'extract_page_to_markdown|select_download_format)\s*\('
+				r'\b(?:next_search_item|download_image_from_url|record_downloaded_image|'
+				r'validate_download_completion|finish_download_task|navigate_idp_search_page|'
+				r'download_current_idp_search_page_images|wait_for_human_verification|'
+				r'extract_page_to_markdown)\s*\('
 			)
 			if re.search(custom_tool_pattern, code or ''):
 				return ActionResult(
 					error=(
-						'禁止通过 evaluate() 调用 LOC 自定义工具。'
-						'请把 collect_loc_result_queue/get_next_loc_queue_item/'
-						'mark_loc_queue_item/wait_for_human_verification/'
-						'rebuild_loc_download_state/extract_page_to_markdown/'
-						'select_download_format 作为独立 tool action 直接调用。'
+						'禁止通过 evaluate() 调用本项目的自定义工具。'
+						'next_search_item / download_image_from_url / record_downloaded_image / '
+						'validate_download_completion / finish_download_task / navigate_idp_search_page / '
+						'download_current_idp_search_page_images / wait_for_human_verification / '
+						'extract_page_to_markdown 都是独立 tool action，'
+						'请直接以 action 形式调用（不要写进 evaluate 的 code 里当 JavaScript 执行）。'
 					)
 				)
 

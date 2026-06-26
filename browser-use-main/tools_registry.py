@@ -140,17 +140,11 @@ class DownloadImageFromUrlParams(BaseModel):
     black_threshold: int = Field(default=18, ge=0, le=80, description='截图兜底自动去黑边阈值')
     white_threshold: int = Field(default=245, ge=180, le=255, description='截图兜底自动去白边阈值')
     border_ratio: float = Field(default=0.985, description='截图兜底一整行/列超过该比例为黑色或白色时才视为边框；工具会把异常值归一化到 0.90-0.999')
-    allowed_host_suffixes: list[str] = Field(default_factory=list, description='可选域名后缀白名单，例如 ["idp.bl.uk", "data.idp.bl.uk"]；为空时允许任意公网 http(s) 图片 URL')
+    allowed_host_suffixes: list[str] = Field(default_factory=list, description='可选域名后缀白名单，例如 ["example.org", "data.example.org"]；为空时允许任意公网 http(s) 图片 URL')
     record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名')
     info_filename: str = Field(default='temple_photo_info.md', description='Markdown 信息表文件名')
     timeout_seconds: int = Field(default=180, ge=30, le=900, description='直接下载超时时间')
-
-
-class NavigateIdpSearchPageParams(BaseModel):
-    """跳转 IDP 搜索结果页的参数模型"""
-    keyword: str = Field(default='china temple', description='搜索关键词，默认 china temple')
-    page: str | int = Field(default=1, description='页码；工具会从类似 2D 的脏值中提取数字')
-    limit: str | int = Field(default=50, description='每页条数；工具会限制到 1-100')
+    force_generic: bool = Field(default=False, description='稳定优先：跳过站点专属的 URL→IIIF manifest 推导加速，只用传入/页面识别到的图片直链 + DOM 候选 + 三级兜底，对任意站点走同一条久经验证的通用路径（牺牲效率换稳定）')
 
 
 class NextSearchItemParams(BaseModel):
@@ -158,7 +152,7 @@ class NextSearchItemParams(BaseModel):
     keyword: str = Field(default='', description='当前搜索关键词，仅用于在游标文件里标注，可留空')
     item_selector: str = Field(
         default='',
-        description='搜索结果页中 item 详情链接的 CSS 选择器；留空时按当前站点已注册的 hint 自动选择（如 IDP 用 a[href*="/collection/"]）',
+        description='搜索结果页中 item 详情链接的 CSS 选择器；留空时按当前站点已注册的 hint 自动选择（如 idp.bl.uk 注册了 a[href*="/collection/"]）',
     )
     mark_done_url: str = Field(
         default='',
@@ -166,23 +160,6 @@ class NextSearchItemParams(BaseModel):
     )
     record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名，用于交叉核对已下载的 item')
     max_scan: int = Field(default=500, ge=1, le=2000, description='单页最多枚举多少个 item')
-
-
-class DownloadCurrentIdpSearchPageImagesParams(BaseModel):
-    """批量下载当前 IDP 搜索结果页中的图片。"""
-    target_count: int = Field(default=1000, ge=1, description='总目标有效记录数，达到后自动停止')
-    max_items: int = Field(default=50, ge=1, le=100, description='当前搜索页最多处理多少个藏品结果')
-    start_index: int = Field(default=0, ge=0, description='从当前搜索页第几个结果开始处理，0 表示第一个')
-    images_per_item: int = Field(default=1, ge=1, le=5, description='每个藏品最多保存几张图片，默认只保存主图')
-    file_prefix: str = Field(default='temple', description='保存文件名前缀，例如 temple')
-    title_prefix: str = Field(default='china_temple', description='title.txt 中的标题前缀')
-    allowed_host_suffixes: list[str] = Field(
-        default_factory=lambda: ['idp.bl.uk', 'data.idp.bl.uk', 'bl.uk'],
-        description='允许下载的官方域名后缀',
-    )
-    record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名')
-    info_filename: str = Field(default='temple_photo_info.md', description='Markdown 信息表文件名')
-    timeout_seconds: int = Field(default=120, ge=30, le=900, description='Python 直接下载单张图片的超时时间')
 
 
 class ValidateDownloadCompletionParams(BaseModel):
@@ -691,39 +668,13 @@ def _sanitize_allowed_host_suffixes(suffixes: list[str] | None) -> list[str]:
     return cleaned
 
 
-def _is_invalid_idp_collection_url(url: str) -> bool:
-    parsed = urlparse(_clean_url_text(url))
-    if (parsed.hostname or '').lower() != 'idp.bl.uk':
-        return False
-    path = parsed.path.strip('/')
-    if path == 'collection' or path == 'collection/':
-        return False
-    if not path.startswith('collection/'):
-        return False
-    item_id = path.split('/', 1)[1].split('/', 1)[0].strip()
-    return bool(item_id) and not re.fullmatch(r'[A-Fa-f0-9]{24,64}', item_id)
-
-
-def _is_valid_idp_page_url(url: str) -> bool:
-    parsed = urlparse(_clean_url_text(url))
-    if (parsed.hostname or '').lower() != 'idp.bl.uk':
-        return False
-    path = parsed.path.strip('/')
-    if path in {'collection', 'collection/'}:
-        return True
-    if path.startswith('collection/'):
-        item_id = path.split('/', 1)[1].split('/', 1)[0].strip()
-        return bool(re.fullmatch(r'[A-Fa-f0-9]{24,64}', item_id))
-    return False
-
-
 def _choose_reliable_page_url(agent_page_url: str, current_page_url: str) -> tuple[str, str]:
     agent_url = _clean_url_text(agent_page_url)
     current_url = _clean_url_text(current_page_url)
-    if _is_invalid_idp_collection_url(agent_url):
-        if _is_valid_idp_page_url(current_url):
-            return current_url, f'- 已忽略模型传入的非法 IDP 详情页 URL，改用当前页面: {current_url}\n'
-        return '', f'- 已拒绝模型传入的非法 IDP 详情页 URL: {agent_url}\n'
+    if _site_invalid_collection_url(agent_url):
+        if _site_valid_page_url(current_url):
+            return current_url, f'- 已忽略模型传入的非法详情页 URL，改用当前页面: {current_url}\n'
+        return '', f'- 已拒绝模型传入的非法详情页 URL（疑似搜索/列表页）: {agent_url}\n'
     return agent_url or current_url, ''
 
 
@@ -773,19 +724,6 @@ def _find_downloaded_record_by_image_url(record_filename: str, image_url: str) -
         if record.get('status') == 'downloaded' and str(record.get('image_url') or '').strip() == normalized_url:
             return record
     return None
-
-
-def _idp_manifest_url_from_page_url(page_url: str) -> str:
-    parsed = urlparse((page_url or '').strip())
-    host = (parsed.hostname or '').lower()
-    path = parsed.path.strip('/')
-    if host == 'idp.bl.uk' and path.startswith('collection/'):
-        item_id = path.split('/', 1)[1].split('/', 1)[0].strip()
-        if re.fullmatch(r'[A-Fa-f0-9]{24,64}', item_id):
-            return f'https://data.idp.bl.uk/iiif/3/manifest/{item_id.upper()}'
-    if host == 'data.idp.bl.uk' and '/iiif/3/manifest/' in f'/{path}/':
-        return (page_url or '').strip().rstrip('/')
-    return ''
 
 
 def _record_sort_key(record: dict) -> tuple[int, str]:
@@ -919,23 +857,19 @@ def _is_provisional_image_stem(stem: str) -> bool:
 
 
 def _source_item_id_from_urls(page_url: str, image_url: str = '') -> str:
+    """从 URL 提取站内 item id：优先用站点 hint，无则用通用兜底（URL 路径末段）。"""
+    site_id = _site_item_id_from_urls(page_url, image_url)
+    if site_id:
+        return site_id
+    # 通用兜底：取详情页 URL 路径里最后一个非空、非纯数字的路径段作为 item id，
+    # 对任意站点都给出一个稳定可读的标识（牺牲站点精度换全站点可用）。
     for raw_url in (page_url, image_url):
         parsed = urlparse((raw_url or '').strip())
         path_parts = [part for part in parsed.path.split('/') if part]
-        host = (parsed.hostname or '').lower()
-        if host == 'idp.bl.uk' and len(path_parts) >= 2 and path_parts[0] == 'collection':
-            return path_parts[1].upper()
-        if host == 'data.idp.bl.uk' and 'manifest' in path_parts:
-            index = path_parts.index('manifest')
-            if index + 1 < len(path_parts):
-                return path_parts[index + 1].upper()
-        if host == 'data.idp.bl.uk' and 'iiif' in path_parts:
-            try:
-                index = path_parts.index('3')
-            except ValueError:
-                continue
-            if index + 1 < len(path_parts):
-                return path_parts[index + 1].upper()
+        for segment in reversed(path_parts):
+            seg = segment.strip()
+            if seg and not seg.isdigit() and '.' not in seg:
+                return seg.upper()
     return ''
 
 
@@ -1158,19 +1092,24 @@ def register_download_site_hint(
     *,
     manifest_from_page_url=None,
     is_invalid_collection_url=None,
+    is_valid_page_url=None,
+    item_id_from_urls=None,
     item_link_selector: str = '',
 ) -> None:
     """
-    注册某站点的下载 hint：从详情页 URL 推导 IIIF manifest、非法 collection URL 判定，
-    以及搜索结果页中"item 详情链接"的 CSS 选择器（供 next_search_item 按 DOM 顺序枚举本页 item）。
+    注册某站点的下载 hint：从详情页 URL 推导 IIIF manifest、非法 collection URL 判定、
+    合法详情页 URL 判定、从 URL 提取站内 item id，以及搜索结果页中"item 详情链接"的 CSS 选择器
+    （供 next_search_item 按 DOM 顺序枚举本页 item）。
     download_image_from_url / next_search_item 通过通用分发调用这些 hint，新增站点只需在此注册，
-    无需改下载/发号工具本身。
+    无需改下载/发号工具本身，通用核心也不含任何站点硬编码。
     """
     normalized_hosts = tuple(h.strip().lower() for h in hosts if h and h.strip())
     _SITE_DOWNLOAD_HINTS.append({
         'hosts': normalized_hosts,
         'manifest': manifest_from_page_url,
         'invalid_collection': is_invalid_collection_url,
+        'valid_page': is_valid_page_url,
+        'item_id': item_id_from_urls,
         'item_link_selector': (item_link_selector or '').strip(),
     })
 
@@ -1222,13 +1161,35 @@ def _site_item_selector(url: str) -> str:
     return ''
 
 
-# 注册 idp.bl.uk 的下载 hint（复用现有 IDP helper，行为保持不变）。
-register_download_site_hint(
-    ['idp.bl.uk', 'data.idp.bl.uk'],
-    manifest_from_page_url=_idp_manifest_url_from_page_url,
-    is_invalid_collection_url=_is_invalid_idp_collection_url,
-    item_link_selector='a[href*="/collection/"]',
-)
+def _site_valid_page_url(url: str) -> bool:
+    """通用分发：若有站点 hint 判定该 URL 为合法详情页，返回 True；无 hint 时返回 False。"""
+    for hint in _matching_site_hints(url):
+        fn = hint.get('valid_page')
+        if fn is None:
+            continue
+        try:
+            if fn(url):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _site_item_id_from_urls(page_url: str, image_url: str = '') -> str:
+    """通用分发：若有站点 hint 能从 URL 提取站内 item id，返回之；否则空串。"""
+    for raw_url in (page_url, image_url):
+        for hint in _matching_site_hints(raw_url or ''):
+            fn = hint.get('item_id')
+            if fn is None:
+                continue
+            try:
+                result = fn(page_url, image_url)
+            except Exception:
+                continue
+            if result:
+                return result
+    return ''
+
 
 
 def _append_image_record(record_file: Path, record: dict) -> None:
@@ -2415,28 +2376,6 @@ def format_download_validation_report(validation: dict) -> str:
     return '\n'.join(lines)
 
 
-def _idp_progress_file() -> Path:
-    return AGENT_DATA_DIR / 'idp_progress.json'
-
-
-def _load_idp_progress() -> dict:
-    progress_file = _idp_progress_file()
-    if not progress_file.exists():
-        return {}
-    try:
-        data = json_module.loads(progress_file.read_text(encoding='utf-8'))
-    except json_module.JSONDecodeError:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _write_idp_progress(progress: dict) -> Path:
-    progress_file = _idp_progress_file()
-    progress_file.parent.mkdir(parents=True, exist_ok=True)
-    progress_file.write_text(json_module.dumps(progress, ensure_ascii=False, indent=2), encoding='utf-8')
-    return progress_file
-
-
 async def _current_browser_url(browser_session) -> str:
     js_code = 'window.location.href'
     cdp_session = await browser_session.get_or_create_cdp_session()
@@ -2835,6 +2774,18 @@ def _format_output(
 # === 工具拆分：导入 tool_actions/ 下各工具，触发 @tools.action 注册并 re-export ===
 # 必须放在文件末尾——此处所有共享 helper / 参数模型 / 运行时全局均已定义，
 # 各 tool 模块 `from tools_registry import ...` 才能解析成功（标准的“底部注册”模式）。
+#
+# 先导入可插拔站点模块（sites/），触发其 register_download_site_hint 注入，并把
+# 站点特有的参数模型 / 进度 helper re-export 到本模块命名空间，供下游
+# tool_actions / main.py 继续 `from tools_registry import ...`（保持调用点不变）。
+from sites.idp import (  # noqa: E402,F401
+    NavigateIdpSearchPageParams,
+    DownloadCurrentIdpSearchPageImagesParams,
+    _idp_progress_file,
+    _load_idp_progress,
+    _write_idp_progress,
+)
+
 from tool_actions.wait_for_human_verification import wait_for_human_verification  # noqa: E402,F401
 from tool_actions.record_downloaded_image import record_downloaded_image  # noqa: E402,F401
 from tool_actions.validate_download_completion import validate_download_completion  # noqa: E402,F401

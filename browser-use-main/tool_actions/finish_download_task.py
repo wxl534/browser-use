@@ -23,7 +23,6 @@ async def finish_download_task(params: FinishDownloadTaskParams):
     validation = validate_download_artifacts(
         target_count=params.target_count,
         record_filename=params.record_filename,
-        title_filename=params.title_filename,
         validate_image_files=True,
         include_duplicate_hash_groups=True,
     )

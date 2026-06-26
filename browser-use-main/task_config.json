@@ -8,7 +8,7 @@
     "data.idp.bl.uk",
     "bl.uk"
   ],
-  "mode": "idp_batch",
+  "mode": "generic_per_item",
   "force_generic": false,
   "item_selector": ""
 }

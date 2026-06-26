@@ -14,7 +14,7 @@ from tools_registry import (
 @tools.action(
     description=(
         '批量处理当前 IDP 搜索结果页：一次提取多个 /collection/ 藏品，'
-        '在浏览器上下文 fetch IIIF manifest 和图片，下载到 image 目录，并写入 image_record.jsonl/title.txt。'
+        '在浏览器上下文 fetch IIIF manifest 和图片，下载到 ImagesCache 缓存目录，并写入 image_record.jsonl。'
         '用于替代 agent 每张图逐页点击，可显著提升 china temple 这类 IDP 批量任务效率。'
     ),
     param_model=DownloadCurrentIdpSearchPageImagesParams,

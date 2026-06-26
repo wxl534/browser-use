@@ -18,7 +18,6 @@ from tools_registry import (
     _record_sort_key,
     _rename_image_to_final_name,
     _rewrite_image_info_file,
-    _rewrite_image_title_file,
     _safe_agent_data_filename,
     _safe_record_sequence_for_existing_file,
     _sha256_file,
@@ -34,8 +33,8 @@ from tools_registry import (
 
 @tools.action(
     description=(
-        '记录一张已成功保存到 image 目录的非 LOC 图片。'
-        '工具会用 UTF-8 自动去重并重写 browseruse_agent_data/image_record.jsonl、title.txt 和信息表，'
+        '记录一张已成功保存到 ImagesCache 缓存目录的非 LOC 图片。'
+        '工具会用 UTF-8 自动去重并重写 browseruse_agent_data/image_record.jsonl 和信息表，'
         '避免 write_file 追加导致重复行或 GBK 编码错误。'
     ),
     param_model=RecordDownloadedImageParams,
@@ -160,7 +159,6 @@ async def record_downloaded_image(params: RecordDownloadedImageParams):
         records.sort(key=_record_sort_key)
 
         _write_image_records(record_file, records)
-        title_file = _rewrite_image_title_file(data_dir, records)
         info_file = _rewrite_image_info_file(data_dir, records, params.info_filename)
 
         downloaded_count = sum(1 for item in records if item.get('status') == 'downloaded')
@@ -170,7 +168,6 @@ async def record_downloaded_image(params: RecordDownloadedImageParams):
             f'- content_hash: {file_hash}\n'
             f'- source_hash: {source_hash}\n'
             f'- 当前有效记录: {downloaded_count}\n'
-            f'- 标题文件: {title_file}\n'
             f'- 信息表: {info_file}\n'
             f'- 结构化记录: {record_file}'
         )

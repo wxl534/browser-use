@@ -5,9 +5,9 @@
 
 ## 任务目标
 
-访问 **`{{ site_url }}`**，搜索关键词 **`{{ keyword }}`**，按搜索结果顺序下载 **前 n = {{ target_count }} 张与“{{ keyword }}”及其语义相关的有效图片** 到本地 `image` 目录，并提取每张图片对应的藏品信息。
+访问 **`{{ site_url }}`**，搜索关键词 **`{{ keyword }}`**，按搜索结果顺序下载 **前 n = {{ target_count }} 张与“{{ keyword }}”及其语义相关的有效图片** 到本次运行的 `ImagesCache` 缓存目录（由下载工具自动管理，无需手动指定路径），并提取每张图片对应的藏品信息。
 
-本任务采用“下载即最终命名”逻辑：每成功保存一张图片后，工具会立即用该图自己的标题生成可读临时名，落地后追加其“对应信息”的 hash 作为最终文件名，并立刻写入结构化记录。`title.txt` 只作为可读导出，不再作为最终重命名依据。
+本任务采用“下载即最终命名”逻辑：每成功保存一张图片后，工具会立即用该图自己的标题生成可读临时名，落地后追加其“对应信息”的 hash 作为最终文件名，并立刻写入结构化记录。
 {{#if is_batch}}
 本次为**批量模式（idp_batch）**：优先调用 `download_current_idp_search_page_images` 批量处理当前搜索结果页；只有批量工具无法处理某个单项时，才退回逐 item 流程（`next_search_item` + `download_image_from_url`）。
 {{/if}}
@@ -31,10 +31,9 @@
 3. 按搜索结果顺序处理，不要随机挑选。
 4. 每个详情页可保存 1 张或多张可见馆藏图片；总数达到 {{ target_count }} 张后停止。
 5. 只保存馆藏图片，不保存 logo、按钮、Cookie 横幅、导航栏、社交分享图标、页面装饰图。
-6. 每成功保存一张图片后必须立刻最终命名并记录；优先用 `download_image_from_url` 自动找图、保存、hash 去重、最终命名并记录，只有图片已通过其他方式真实落地到 `image` 目录后，才单独调用 `record_downloaded_image`。
-7. `record_downloaded_image` 会计算 `content_hash` / `source_hash` / `title_hash`，把临时图片立即改为最终文件名，并自动维护 `browseruse_agent_data/image_record.jsonl`、`browseruse_agent_data/title.txt` 和 `browseruse_agent_data/temple_photo_info.md`。
-8. `title.txt` 只是人工查看用的导出文件，不允许依赖它做最终重命名。
-9. 不要重复处理同一详情页 URL、同一图片 URL 或同一图片内容。
+6. 每成功保存一张图片后必须立刻最终命名并记录；优先用 `download_image_from_url` 自动找图、保存、hash 去重、最终命名并记录，只有图片已通过其他方式真实落地到 `ImagesCache` 缓存目录后，才单独调用 `record_downloaded_image`。
+7. `record_downloaded_image` 会计算 `content_hash` / `source_hash` / `title_hash`，把临时图片立即改为最终文件名，并自动维护 `browseruse_agent_data/image_record.jsonl` 和 `browseruse_agent_data/temple_photo_info.md`。
+8. 不要重复处理同一详情页 URL、同一图片 URL 或同一图片内容。
 
 ## 推荐执行流程
 
@@ -65,7 +64,7 @@ download_current_idp_search_page_images(
 )
 ```
 
-该工具会在浏览器上下文中批量提取当前页藏品 URL、解析官方 IIIF manifest、下载主图、按 title+hash 立即最终命名并写入 `image_record.jsonl` / `title.txt`，不要再对同一页逐个结果手动点击、逐张调用 LLM 决策。
+该工具会在浏览器上下文中批量提取当前页藏品 URL、解析官方 IIIF manifest、下载主图、按 title+hash 立即最终命名并写入 `image_record.jsonl`，不要再对同一页逐个结果手动点击、逐张调用 LLM 决策。
 
 批量工具会自动维护 `browseruse_agent_data/idp_progress.json`，其中包含下一次续跑应使用的 `next_page` 和 `next_index`。断点续跑时必须优先相信这个进度文件，不要仅凭最大图片序号猜测页码。
 
@@ -103,20 +102,20 @@ download image 链接
 缩略图对应的大图 URL
 ```
 
-每张图片保存到 `image` 目录，文件名序号从 `temple_001` 开始递增。不能手动重置到 1；必须使用当前下一安全序号，确保不会覆盖已有图片。
+每张图片保存到 `ImagesCache` 缓存目录（工具自动落地），文件名序号从 `temple_001` 开始递增。不能手动重置到 1；必须使用当前下一安全序号，确保不会覆盖已有图片。
 
 保存要求：
 
 1. 如果一页有多张相关大图，按页面图片顺序保存。
 2. 优先保存原始图片字节或网站提供的大图；到达详情页或 viewer 后应直接调用 `download_image_from_url`，不要停留在图片页反复滚动。
-3. `download_image_from_url` 会按学习到的顺序尝试 Python 直连、浏览器上下文 fetch、干净截图裁剪兜底；如果传入的是详情页 URL、IIIF manifest URL 或 IIIF 大图 URL，工具会优先解析真实大图 URL 并检查是否已有记录；如果工具提示“图片 URL 已有下载记录”“图片内容已有下载记录”或“image 目录中已存在相同图片内容”，视为当前图片已处理成功，直接继续下一条。
+3. `download_image_from_url` 会按学习到的顺序尝试 Python 直连、浏览器上下文 fetch、干净截图裁剪兜底；如果传入的是详情页 URL、IIIF manifest URL 或 IIIF 大图 URL，工具会优先解析真实大图 URL 并检查是否已有记录；如果工具提示“图片 URL 已有下载记录”“图片内容已有下载记录”或“image 目录中已存在相同图片内容”（均指本次运行的 `ImagesCache` 缓存目录），视为当前图片已处理成功，直接继续下一条。
 {{#if force_generic}}
-4. 本次启用 **force_generic**：调用 `download_image_from_url` 时传 `force_generic=true`，跳过站点专属的 URL→manifest 加速，只用传入/页面识别到的图片直链 + DOM 候选 + 三级兜底，对任意站点走同一条久经验证的通用路径（牺牲效率换稳定）。
+   - 本次启用 **force_generic**：调用 `download_image_from_url` 时传 `force_generic=true`，跳过站点专属的 URL→manifest 加速，只用传入/页面识别到的图片直链 + DOM 候选 + 三级兜底，对任意站点走同一条久经验证的通用路径（牺牲效率换稳定）。
 {{/if}}
-5. 如果工具返回普通失败（图片过小、像素几乎单色、非法详情页 URL 等），不要反复 scroll，重试 1 次后跳过当前图片并继续下一条。
-6. 不要保存缩略图；如果只能看到缩略图，优先打开详情页大图、viewer 或下载链接。
-7. 不要下载 PDF、视频、音频或网页附件。
-8. 不要为了达到 n 张而保存无关图片或页面截图。
+4. 如果工具返回普通失败（图片过小、像素几乎单色、非法详情页 URL 等），不要反复 scroll，重试 1 次后跳过当前图片并继续下一条。
+5. 不要保存缩略图；如果只能看到缩略图，优先打开详情页大图、viewer 或下载链接。
+6. 不要下载 PDF、视频、音频或网页附件。
+7. 不要为了达到 n 张而保存无关图片或页面截图。
 
 ## 写入结构化记录
 
@@ -140,19 +139,19 @@ download_image_from_url(
 )
 ```
 
-只有图片已经用其他可靠方式保存到 `image` 目录时，才单独调用 `record_downloaded_image`；不要把它当作下载工具。
+只有图片已经用其他可靠方式保存到 `ImagesCache` 缓存目录时，才单独调用 `record_downloaded_image`；不要把它当作下载工具。
 
 标题要求：
 
 1. 一张图片只写一行标题，且只有图片成功保存后才写。
-2. 不要提前批量写标题，不要手动写 `title.txt` 或 `END`。
+2. 不要提前批量写标题。
 3. 不要使用 `write_file` 记录标题，不要手动追加 `temple_photo_info.md`。
 4. 标题应简短、稳定，避免方括号、引号、斜杠、冒号、问号、句号结尾等特殊字符。
 5. 推荐格式：`{{ title_prefix }}_001_藏品标题_图1`。
 
 ## 提取并保存信息
 
-`record_downloaded_image` 会自动根据 `image_record.jsonl` 重写 `title.txt` 和 `temple_photo_info.md`。每条记录必须包含：序号、保存文件名、重命名标题、藏品标题、藏品 URL、图片 URL、相关证据、作者/时代/地点/分类/馆藏号、简短中文说明。不要手动维护 Markdown 表格格式；只要传入字段即可。
+`record_downloaded_image` 会自动根据 `image_record.jsonl` 重写 `temple_photo_info.md`。每条记录必须包含：序号、保存文件名、重命名标题、藏品标题、藏品 URL、图片 URL、相关证据、作者/时代/地点/分类/馆藏号、简短中文说明。不要手动维护 Markdown 表格格式；只要传入字段即可。
 
 ## 失败和跳过规则
 
@@ -201,11 +200,11 @@ download_image_from_url(
 
 ## 完成标准
 
-不要直接调用内置 `done`。结束任务必须调用 `finish_download_task(target_count={{ target_count }}, record_filename="image_record.jsonl", title_filename="title.txt")`，它会用程序生成的确定性报告结束任务。
+不要直接调用内置 `done`。结束任务必须调用 `finish_download_task(target_count={{ target_count }}, record_filename="image_record.jsonl")`，它会用程序生成的确定性报告结束任务。
 
-满足任一条件后，必须先调用 `validate_download_completion(target_count={{ target_count }}, record_filename="image_record.jsonl", title_filename="title.txt")`：
+满足任一条件后，必须先调用 `validate_download_completion(target_count={{ target_count }}, record_filename="image_record.jsonl")`：
 
-1. 已成功保存 {{ target_count }} 张与关键词 `{{ keyword }}` 相关的图片，并完成 `title.txt` 与 `temple_photo_info.md`。
+1. 已成功保存 {{ target_count }} 张与关键词 `{{ keyword }}` 相关的图片，并完成 `temple_photo_info.md`。
 2. 已处理完所有搜索结果页，但不足 {{ target_count }} 张；报告实际保存数量、跳过原因和未完成原因。
 3. 网站无法访问，或人机验证在 `wait_for_human_verification` 快速尝试 + 外层监工自动刷新 `cf_clearance` 并重启多轮后仍持续无法通过。
 

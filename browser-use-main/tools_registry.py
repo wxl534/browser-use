@@ -166,14 +166,12 @@ class ValidateDownloadCompletionParams(BaseModel):
     """最终下载结果校验参数模型"""
     target_count: int = Field(default=100, ge=1, description='目标有效下载数量')
     record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名')
-    title_filename: str = Field(default='title.txt', description='标题文件名')
 
 
 class FinishDownloadTaskParams(BaseModel):
     """用确定性校验报告结束任务的参数模型"""
     target_count: int = Field(default=100, ge=1, description='目标有效下载数量')
     record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名')
-    title_filename: str = Field(default='title.txt', description='标题文件名')
 
 
 # === 创建 tools 对象 ===
@@ -339,27 +337,11 @@ def _write_extracted_file(output_dir: Path, file_name: str, file_content: str) -
 
 def _normalize_title(title: str, fallback: str = 'untitled') -> str:
     """
-    清理写入 title.txt 的标题，保证每个标题只占一行。
+    清理图片标题，保证每个标题只占一行（用于文件名词干、记录字段和信息表）。
     """
     normalized = title.replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ')
     normalized = re.sub(r'\s+', ' ', normalized).strip()
     return normalized or fallback
-
-
-def _append_download_title(title: str, title_file: Path | None = None) -> Path:
-    """
-    将成功触发下载的图片标题追加写入真实的 browseruse_agent_data/title.txt。
-    """
-    target_file = title_file or AGENT_DATA_DIR / 'title.txt'
-    target_file.parent.mkdir(parents=True, exist_ok=True)
-
-    normalized_title = _normalize_title(title)
-    existing_content = target_file.read_text(encoding='utf-8') if target_file.exists() else ''
-    prefix = '' if not existing_content or existing_content.endswith('\n') else '\n'
-    with open(target_file, 'a', encoding='utf-8') as f:
-        f.write(f'{prefix}{normalized_title}\n')
-
-    return target_file
 
 
 def _safe_download_filename(title: str, url: str, suffix: str = '.tif') -> str:
@@ -750,17 +732,6 @@ def _markdown_cell(value: object) -> str:
     text = str(value or '').replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ')
     text = text.replace('|', '\\|')
     return re.sub(r'\s+', ' ', text).strip()
-
-
-def _rewrite_image_title_file(data_dir: Path, records: list[dict]) -> Path:
-    title_file = data_dir / 'title.txt'
-    titles = [
-        _normalize_title(str(record.get('title') or record.get('collection_title') or record.get('file_name') or 'untitled'))
-        for record in sorted(records, key=_record_sort_key)
-        if record.get('status') == 'downloaded'
-    ]
-    title_file.write_text('\n'.join([*titles, 'END', '']), encoding='utf-8')
-    return title_file
 
 
 def _rewrite_image_info_file(data_dir: Path, records: list[dict], info_filename: str) -> Path:
@@ -1207,11 +1178,6 @@ def _append_image_info_record(data_dir: Path, record: dict, info_filename: str) 
     return info_file
 
 
-def _append_image_title_record(data_dir: Path, record: dict) -> Path:
-    title = _normalize_title(str(record.get('title') or record.get('collection_title') or record.get('file_name') or 'untitled'))
-    return _append_download_title(title, data_dir / 'title.txt')
-
-
 async def _record_saved_image_fast(
     *,
     image_path: Path,
@@ -1328,7 +1294,6 @@ async def _record_saved_image_fast(
         _append_image_record(record_index.record_file, record)
         record_index.add_record(record)
         existing_image_hashes[file_hash] = image_path
-        title_file = _append_image_title_record(data_dir, record)
         info_file = _append_image_info_record(data_dir, record, info_filename)
 
         return ActionResult(
@@ -1337,7 +1302,6 @@ async def _record_saved_image_fast(
                 f'- content_hash: {file_hash}\n'
                 f'- source_hash: {source_hash}\n'
                 f'- 当前有效记录: {record_index.downloaded_count}\n'
-                f'- 标题文件: {title_file}\n'
                 f'- 信息表: {info_file}\n'
                 f'- 结构化记录: {record_index.record_file}'
             ),
@@ -2229,15 +2193,6 @@ def _read_downloaded_records(record_file: Path | str) -> list[dict]:
     return records
 
 
-def _count_title_lines(title_file: Path) -> int:
-    if not title_file.exists():
-        return 0
-    return len([
-        line for line in title_file.read_text(encoding='utf-8').splitlines()
-        if line.strip() and line.strip().upper() != 'END'
-    ])
-
-
 def _image_hash_groups() -> list[dict]:
     groups: dict[str, list[str]] = {}
     if not IMAGE_DIR.exists():
@@ -2262,16 +2217,13 @@ def _image_hash_groups() -> list[dict]:
 def validate_download_artifacts(
     target_count: int = 100,
     record_filename: str = 'image_record.jsonl',
-    title_filename: str = 'title.txt',
     *,
     validate_image_files: bool = True,
     include_duplicate_hash_groups: bool = True,
 ) -> dict:
     data_dir = AGENT_DATA_DIR
     record_file = data_dir / _safe_agent_data_filename(record_filename, 'image_record.jsonl')
-    title_file = data_dir / _safe_agent_data_filename(title_filename, 'title.txt')
     records = _read_downloaded_records(record_file)
-    title_count = _count_title_lines(title_file)
     sequences = sorted({int(record.get('sequence') or 0) for record in records if str(record.get('sequence') or '').isdigit()})
     missing_sequences = [sequence for sequence in range(1, target_count + 1) if sequence not in sequences]
     image_files = [
@@ -2304,7 +2256,6 @@ def validate_download_artifacts(
     duplicate_hash_groups = _image_hash_groups() if include_duplicate_hash_groups else []
     complete = (
         len(records) >= target_count
-        and title_count >= target_count
         and len(image_files) >= target_count
         and (not validate_image_files or not bad_files)
         and (not include_duplicate_hash_groups or not duplicate_hash_groups)
@@ -2314,7 +2265,6 @@ def validate_download_artifacts(
         'complete': complete,
         'target_count': target_count,
         'downloaded_records': len(records),
-        'title_count': title_count,
         'image_file_count': len(image_files),
         'remaining_records': remaining_records,
         'missing_sequences': missing_sequences,
@@ -2324,7 +2274,6 @@ def validate_download_artifacts(
         'validate_image_files': validate_image_files,
         'include_duplicate_hash_groups': include_duplicate_hash_groups,
         'record_file': str(record_file),
-        'title_file': str(title_file),
     }
 
 
@@ -2335,7 +2284,6 @@ def format_download_validation_report(validation: dict) -> str:
         f"- target_count: {validation.get('target_count')}",
         f"- downloaded_records: {validation.get('downloaded_records')}",
         f"- remaining_records_needed: {validation.get('remaining_records')}",
-        f"- title_txt_entries: {validation.get('title_count')}",
         f"- image_files: {validation.get('image_file_count')}",
         f"- sequence_gaps_warning_only: {validation.get('missing_sequences') or 'none'}",
         f"- bad_or_empty_images: {len(validation.get('bad_files') or [])}",
@@ -2344,7 +2292,6 @@ def format_download_validation_report(validation: dict) -> str:
         f"- duplicate_hash_scan: {'enabled' if validation.get('include_duplicate_hash_groups') else 'skipped_for_batch'}",
         f"- orphan_files_warning_only: {len(validation.get('orphan_files') or [])}",
         f"- record_file: {validation.get('record_file')}",
-        f"- title_file: {validation.get('title_file')}",
     ]
     if validation.get('bad_files'):
         lines.append('- bad_image_details:')

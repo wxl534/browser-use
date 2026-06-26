@@ -5,10 +5,11 @@
 
 ## 任务目标
 
-访问 **`https://idp.bl.uk/`**，搜索关键词 **`china buddhist`**，按搜索结果顺序下载 **前 n = 5000 张与“china buddhist”及其语义相关的有效图片** 到本地 `image` 目录，并提取每张图片对应的藏品信息。
+访问 **`https://idp.bl.uk/`**，搜索关键词 **`china buddhist`**，按搜索结果顺序下载 **前 n = 5000 张与“china buddhist”及其语义相关的有效图片** 到本次运行的 `ImagesCache` 缓存目录（由下载工具自动管理，无需手动指定路径），并提取每张图片对应的藏品信息。
 
-本任务采用“下载即最终命名”逻辑：每成功保存一张图片后，工具会立即用该图自己的标题生成可读临时名，落地后追加其“对应信息”的 hash 作为最终文件名，并立刻写入结构化记录。`title.txt` 只作为可读导出，不再作为最终重命名依据。
-本次为**批量模式（idp_batch）**：优先调用 `download_current_idp_search_page_images` 批量处理当前搜索结果页；只有批量工具无法处理某个单项时，才退回逐 item 流程（`next_search_item` + `download_image_from_url`）。
+本任务采用“下载即最终命名”逻辑：每成功保存一张图片后，工具会立即用该图自己的标题生成可读临时名，落地后追加其“对应信息”的 hash 作为最终文件名，并立刻写入结构化记录。
+
+本次为**通用逐 item 模式（generic_per_item）**：不使用任何站点专属批量工具；对每一页用 `next_search_item` 发号、逐个 item 用 `download_image_from_url` 处理。该模式适用于任意“搜索栏 + item 列表”的图库站点，重点是稳定，不追求极致效率。
 
 ## 允许访问的网站
 
@@ -26,10 +27,9 @@
 3. 按搜索结果顺序处理，不要随机挑选。
 4. 每个详情页可保存 1 张或多张可见馆藏图片；总数达到 5000 张后停止。
 5. 只保存馆藏图片，不保存 logo、按钮、Cookie 横幅、导航栏、社交分享图标、页面装饰图。
-6. 每成功保存一张图片后必须立刻最终命名并记录；优先用 `download_image_from_url` 自动找图、保存、hash 去重、最终命名并记录，只有图片已通过其他方式真实落地到 `image` 目录后，才单独调用 `record_downloaded_image`。
-7. `record_downloaded_image` 会计算 `content_hash` / `source_hash` / `title_hash`，把临时图片立即改为最终文件名，并自动维护 `browseruse_agent_data/image_record.jsonl`、`browseruse_agent_data/title.txt` 和 `browseruse_agent_data/temple_photo_info.md`。
-8. `title.txt` 只是人工查看用的导出文件，不允许依赖它做最终重命名。
-9. 不要重复处理同一详情页 URL、同一图片 URL 或同一图片内容。
+6. 每成功保存一张图片后必须立刻最终命名并记录；优先用 `download_image_from_url` 自动找图、保存、hash 去重、最终命名并记录，只有图片已通过其他方式真实落地到 `ImagesCache` 缓存目录后，才单独调用 `record_downloaded_image`。
+7. `record_downloaded_image` 会计算 `content_hash` / `source_hash` / `title_hash`，把临时图片立即改为最终文件名，并自动维护 `browseruse_agent_data/image_record.jsonl` 和 `browseruse_agent_data/temple_photo_info.md`。
+8. 不要重复处理同一详情页 URL、同一图片 URL 或同一图片内容。
 
 ## 推荐执行流程
 
@@ -43,40 +43,19 @@
 4. 如果搜索结果支持筛选或排序，保持默认相关性排序；如果支持每页显示数量，优先选择 50 或 100。
 
 ### 阶段 2：按顺序处理搜索结果
-对搜索结果页按从上到下、从左到右的顺序处理。为了效率，必须优先使用批量工具：
 
-```text
-download_current_idp_search_page_images(
-  target_count=5000,
-  max_items=50,
-  start_index=0,
-  images_per_item=1,
-  file_prefix="temple",
-  title_prefix="china_buddhist",
-  allowed_host_suffixes=["idp.bl.uk", "data.idp.bl.uk", "bl.uk"],
-  record_filename="image_record.jsonl",
-  info_filename="temple_photo_info.md"
-)
-```
+对搜索结果页按从上到下、从左到右的顺序，用发号工具逐个 item 处理（**禁止凭记忆挑 item**）。每一页重复执行下方“逐 item 单项流程”，直到本页所有 item 处理完，再用站点自身的分页/翻页控件进入下一页。
 
-该工具会在浏览器上下文中批量提取当前页藏品 URL、解析官方 IIIF manifest、下载主图、按 title+hash 立即最终命名并写入 `image_record.jsonl` / `title.txt`，不要再对同一页逐个结果手动点击、逐张调用 LLM 决策。
+#### 逐 item 单项流程（发号 + 通用下载）
 
-批量工具会自动维护 `browseruse_agent_data/idp_progress.json`，其中包含下一次续跑应使用的 `next_page` 和 `next_index`。断点续跑时必须优先相信这个进度文件，不要仅凭最大图片序号猜测页码。
-
-续跑必须按 `idp_progress.json` 的页码顺序递增处理；不要自行跳到 page 999、page 5000 或其他极深页。如果某一页批量工具 0 新增、manifest 大量失败或超时，应记录该页失败并进入下一页继续批量处理，不要退化为逐个点击详情页。
-
-如果批量工具报告当前页有个别藏品失败，再对失败项按下方“逐 item 单项流程”处理。
-
-#### 逐 item 单项流程（批量失败项兜底；发号 + 通用下载）
-
-0. 调用 `next_search_item()` 获取“本页下一个尚未处理的 item 的序号 + 详情页 URL”。该工具按搜索结果页 DOM 顺序（从上到下、从左到右）枚举本页 item，并交叉核对 `image_record.jsonl` 已下载记录，自动跳过已处理项，避免错位、跳过、重复循环。处理完一个 item 后，把它的详情页 URL 作为 `mark_done_url` 传回再发下一个。1. 打开 `next_search_item` 发回的那个未处理详情页。
+0. 调用 `next_search_item(keyword="china buddhist")` 获取“本页下一个尚未处理的 item 的序号 + 详情页 URL”。该工具按搜索结果页 DOM 顺序（从上到下、从左到右）枚举本页 item，并交叉核对 `image_record.jsonl` 已下载记录，自动跳过已处理项，避免错位、跳过、重复循环。处理完一个 item 后，把它的详情页 URL 作为 `mark_done_url` 传回再发下一个。（若本站点未注册 item 选择器，必须显式传入 `item_selector=""`。）
+1. 打开 `next_search_item` 发回的那个未处理详情页。
 2. 提取标题、详情页 URL、馆藏号、作者/制作者、年代、地点、分类、说明文字。
 3. 确认页面与 `china buddhist` 语境相关。只要标题、说明、地点、来源等字段存在相关证据即可视为相关。
 4. 优先在详情页 DOM 中查找可打开的大图、IIIF 图片、viewer 图片、download image 链接或缩略图对应的大图 URL。
 5. 如果详情页包含多张相关图片，按页面图片顺序逐张保存；如果只需要单张，保存主图。
 6. 调用 `download_image_from_url`（见“写入结构化记录”），保存、hash 去重、最终命名并记录。
 7. 当前详情页处理完成后，把它的 URL 作为 `mark_done_url` 调 `next_search_item` 取下一个；本页取尽后进入下一页。
-8. 当前页处理完后，如果总保存数量仍不足 5000，必须用 `navigate_idp_search_page(keyword="china buddhist", page=下一页, limit=50)` 跳转，不要手写搜索 URL。
 
 ## 图片保存规则
 
@@ -90,17 +69,18 @@ download image 链接
 缩略图对应的大图 URL
 ```
 
-每张图片保存到 `image` 目录，文件名序号从 `temple_001` 开始递增。不能手动重置到 1；必须使用当前下一安全序号，确保不会覆盖已有图片。
+每张图片保存到 `ImagesCache` 缓存目录（工具自动落地），文件名序号从 `temple_001` 开始递增。不能手动重置到 1；必须使用当前下一安全序号，确保不会覆盖已有图片。
 
 保存要求：
 
 1. 如果一页有多张相关大图，按页面图片顺序保存。
 2. 优先保存原始图片字节或网站提供的大图；到达详情页或 viewer 后应直接调用 `download_image_from_url`，不要停留在图片页反复滚动。
-3. `download_image_from_url` 会按学习到的顺序尝试 Python 直连、浏览器上下文 fetch、干净截图裁剪兜底；如果传入的是详情页 URL、IIIF manifest URL 或 IIIF 大图 URL，工具会优先解析真实大图 URL 并检查是否已有记录；如果工具提示“图片 URL 已有下载记录”“图片内容已有下载记录”或“image 目录中已存在相同图片内容”，视为当前图片已处理成功，直接继续下一条。
-5. 如果工具返回普通失败（图片过小、像素几乎单色、非法详情页 URL 等），不要反复 scroll，重试 1 次后跳过当前图片并继续下一条。
-6. 不要保存缩略图；如果只能看到缩略图，优先打开详情页大图、viewer 或下载链接。
-7. 不要下载 PDF、视频、音频或网页附件。
-8. 不要为了达到 n 张而保存无关图片或页面截图。
+3. `download_image_from_url` 会按学习到的顺序尝试 Python 直连、浏览器上下文 fetch、干净截图裁剪兜底；如果传入的是详情页 URL、IIIF manifest URL 或 IIIF 大图 URL，工具会优先解析真实大图 URL 并检查是否已有记录；如果工具提示“图片 URL 已有下载记录”“图片内容已有下载记录”或“image 目录中已存在相同图片内容”（均指本次运行的 `ImagesCache` 缓存目录），视为当前图片已处理成功，直接继续下一条。
+
+4. 如果工具返回普通失败（图片过小、像素几乎单色、非法详情页 URL 等），不要反复 scroll，重试 1 次后跳过当前图片并继续下一条。
+5. 不要保存缩略图；如果只能看到缩略图，优先打开详情页大图、viewer 或下载链接。
+6. 不要下载 PDF、视频、音频或网页附件。
+7. 不要为了达到 n 张而保存无关图片或页面截图。
 
 ## 写入结构化记录
 
@@ -119,22 +99,23 @@ download_image_from_url(
   summary="图片内容和相关信息的中文简述",
   allowed_host_suffixes=["idp.bl.uk", "data.idp.bl.uk", "bl.uk"],
   record_filename="image_record.jsonl",
-  info_filename="temple_photo_info.md")
+  info_filename="temple_photo_info.md"
+)
 ```
 
-只有图片已经用其他可靠方式保存到 `image` 目录时，才单独调用 `record_downloaded_image`；不要把它当作下载工具。
+只有图片已经用其他可靠方式保存到 `ImagesCache` 缓存目录时，才单独调用 `record_downloaded_image`；不要把它当作下载工具。
 
 标题要求：
 
 1. 一张图片只写一行标题，且只有图片成功保存后才写。
-2. 不要提前批量写标题，不要手动写 `title.txt` 或 `END`。
+2. 不要提前批量写标题。
 3. 不要使用 `write_file` 记录标题，不要手动追加 `temple_photo_info.md`。
 4. 标题应简短、稳定，避免方括号、引号、斜杠、冒号、问号、句号结尾等特殊字符。
 5. 推荐格式：`china_buddhist_001_藏品标题_图1`。
 
 ## 提取并保存信息
 
-`record_downloaded_image` 会自动根据 `image_record.jsonl` 重写 `title.txt` 和 `temple_photo_info.md`。每条记录必须包含：序号、保存文件名、重命名标题、藏品标题、藏品 URL、图片 URL、相关证据、作者/时代/地点/分类/馆藏号、简短中文说明。不要手动维护 Markdown 表格格式；只要传入字段即可。
+`record_downloaded_image` 会自动根据 `image_record.jsonl` 重写 `temple_photo_info.md`。每条记录必须包含：序号、保存文件名、重命名标题、藏品标题、藏品 URL、图片 URL、相关证据、作者/时代/地点/分类/馆藏号、简短中文说明。不要手动维护 Markdown 表格格式；只要传入字段即可。
 
 ## 失败和跳过规则
 
@@ -147,8 +128,6 @@ download_image_from_url(
 5. 页面需要登录或付费。（遇到 Cloudflare / 人机验证页**不要直接跳过**，见下方“人机验证处理”。）
 6. 页面明显与关键词 `china buddhist` 语境无关。
 7. 连续出现 `browser not connected`、`No valid agent focus available`、`target may have detached` 或空白 SPA 页面时，不要继续循环恢复；调用 `done` 报告需要重启浏览器会话，并保留已下载记录。
-8. 当 `download_current_idp_search_page_images` 返回的错误以 `[idp_session_corrupted]`、`[idp_extract_failed]`、`[idp_empty_page]` 或 `[idp_batch_unhandled_error]` 开头，**禁止再调用批量工具、navigate_idp_search_page 之外的任何浏览器操作来“绕过”**；必须立刻调用 `finish_download_task` 结束本次会话。
-9. **禁止“手动 fallback”**：批量工具失败后，不允许通过点击 `/collection/<id>/` 详情页链接、打开 IIIF manifest 新 tab、用 `evaluate` 扫 DOM 的方式自行下载图片，以免污染浏览器上下文。
 
 ## 人机验证处理（方案C：Cloudflare 通行证已预先注入）
 
@@ -165,9 +144,9 @@ download_image_from_url(
 
 - 默认运行模式下，旧工具（LOC / Kyohaku 等）不会注册；如需启用必须由部署者显式设置 `BROWSER_USE_ENABLE_LEGACY_TOOLS=1`。Agent 自身永远不要尝试调用这些旧工具。
 - 不要在已提取到 IIIF / viewer / download image URL 后继续点击下载按钮或反复 scroll；直接调用 `download_image_from_url`。
-- 不要在搜索结果页逐个点开 50 个结果；必须先调用 `download_current_idp_search_page_images` 批量处理当前页。
-- 不要因为某页重复或失败就跳到 page 999 / page 5000；只能按进度文件顺序递增页码。
-- 不要手写搜索分页 URL；必须使用 `navigate_idp_search_page`。
+
+- 不要凭记忆判断“下一个该处理哪个 item”；必须用 `next_search_item` 发号。
+
 - 不要使用 `evaluate(code="自定义工具(...)")` 的写法调用工具。
 - 不要使用 `write_file` 记录标题或信息表。
 - 不要访问非官方图片搜索引擎、社交媒体或无关外站。
@@ -176,11 +155,11 @@ download_image_from_url(
 
 ## 完成标准
 
-不要直接调用内置 `done`。结束任务必须调用 `finish_download_task(target_count=5000, record_filename="image_record.jsonl", title_filename="title.txt")`，它会用程序生成的确定性报告结束任务。
+不要直接调用内置 `done`。结束任务必须调用 `finish_download_task(target_count=5000, record_filename="image_record.jsonl")`，它会用程序生成的确定性报告结束任务。
 
-满足任一条件后，必须先调用 `validate_download_completion(target_count=5000, record_filename="image_record.jsonl", title_filename="title.txt")`：
+满足任一条件后，必须先调用 `validate_download_completion(target_count=5000, record_filename="image_record.jsonl")`：
 
-1. 已成功保存 5000 张与关键词 `china buddhist` 相关的图片，并完成 `title.txt` 与 `temple_photo_info.md`。
+1. 已成功保存 5000 张与关键词 `china buddhist` 相关的图片，并完成 `temple_photo_info.md`。
 2. 已处理完所有搜索结果页，但不足 5000 张；报告实际保存数量、跳过原因和未完成原因。
 3. 网站无法访问，或人机验证在 `wait_for_human_verification` 快速尝试 + 外层监工自动刷新 `cf_clearance` 并重启多轮后仍持续无法通过。
 

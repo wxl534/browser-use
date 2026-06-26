@@ -325,11 +325,11 @@ def test_task_md_content():
     else:
         results.fail('task.md 路径', '仍包含 D:\\desktop')
 
-    # title.txt 路径应指向 browseruse_agent_data
-    if 'browseruse_agent_data/title.txt' in task_content or 'browseruse_agent_data\\title.txt' in task_content:
-        results.ok('task.md 中 title.txt 路径正确')
+    # 结构化记录路径应指向 browseruse_agent_data
+    if 'browseruse_agent_data/image_record.jsonl' in task_content or 'browseruse_agent_data\\image_record.jsonl' in task_content:
+        results.ok('task.md 中 image_record.jsonl 路径正确')
     else:
-        results.fail('task.md title.txt 路径', '未指向 browseruse_agent_data/')
+        results.fail('task.md image_record.jsonl 路径', '未指向 browseruse_agent_data/')
 
     if re.search(r'前\s+n\s*=\s*\d+\s*张', task_content) or re.search(r'前\s*\d+\s*张', task_content):
         results.ok('task.md 明确要求处理目标数量图片')
@@ -359,8 +359,8 @@ def test_task_md_content():
     else:
         results.fail('task.md evaluate 规则', '未明确禁止 evaluate 调自定义工具')
 
-    if 'idp.bl.uk' in task_content and 'navigate_idp_search_page' in task_content:
-        results.ok('当前 task 明确是 IDP 批量下载任务')
+    if 'idp.bl.uk' in task_content and ('download_image_from_url' in task_content or 'download_current_idp_search_page_images' in task_content):
+        results.ok('当前 task 是面向 IDP 站点的下载任务（批量或逐 item 模式均可）')
     else:
         results.fail('IDP 任务识别', '当前 task 缺少 IDP 下载任务标识')
 
@@ -538,27 +538,16 @@ def test_run_limit_configuration():
         results.fail('max_steps 配置', f'期望至少 2000，得到 {max_steps}')
 
 
-def test_title_end_marker():
-    """测试主程序收尾时会为 title.txt 补写 END"""
-    print('\n📋 测试 title.txt END 标记')
+def test_title_end_marker_removed():
+    """title.txt 已彻底移除：确认 main 不再导出 title 相关函数。"""
+    print('\n📋 测试 title.txt 已移除')
 
-    from main import ensure_title_end_marker
+    import main
 
-    with tempfile.TemporaryDirectory() as tmp:
-        title_file = Path(tmp) / 'title.txt'
-        title_file.write_text('Image A\nImage B\n', encoding='utf-8')
-        changed = ensure_title_end_marker(title_file)
-
-        if changed and title_file.read_text(encoding='utf-8').endswith('END\n'):
-            results.ok('ensure_title_end_marker 可补写 END')
-        else:
-            results.fail('ensure_title_end_marker', '未正确补写 END')
-
-        changed_again = ensure_title_end_marker(title_file)
-        if not changed_again and title_file.read_text(encoding='utf-8').count('END') == 1:
-            results.ok('ensure_title_end_marker 不会重复写 END')
-        else:
-            results.fail('ensure_title_end_marker 重复写入', '重复写入了 END')
+    if not hasattr(main, 'ensure_title_end_marker') and not hasattr(main, 'count_titles'):
+        results.ok('main 已移除 ensure_title_end_marker / count_titles')
+    else:
+        results.fail('title 函数移除', 'main 仍存在 title 相关函数')
 
 
 def test_prepare_runtime_state_resume():
@@ -570,7 +559,6 @@ def test_prepare_runtime_state_resume():
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp) / 'Images' / 'ImagesCache'
         run_dir.mkdir(parents=True)
-        title_file = run_dir / 'title.txt'
         record_file = run_dir / 'rename_record.txt'
         image_record_file = run_dir / 'image_record.jsonl'
         info_file = run_dir / 'temple_photo_info.md'
@@ -578,7 +566,6 @@ def test_prepare_runtime_state_resume():
         idp_progress_file = run_dir / 'idp_progress.json'
         sqlite_file = run_dir / 'image_catalog.sqlite3'
         report_file = run_dir / 'final_download_report.md'
-        title_file.write_text('Existing title\n', encoding='utf-8')
         record_file.write_text('record\n', encoding='utf-8')
         image_record_file.write_text('{"status":"downloaded"}\n', encoding='utf-8')
         info_file.write_text('# old\n', encoding='utf-8')
@@ -588,7 +575,7 @@ def test_prepare_runtime_state_resume():
         report_file.write_text('report\n', encoding='utf-8')
 
         prepare_runtime_state(run_dir, reset_state=False)
-        if title_file.exists() and record_file.exists() and image_record_file.exists() and info_file.exists() and strategy_file.exists() and idp_progress_file.exists():
+        if record_file.exists() and image_record_file.exists() and info_file.exists() and strategy_file.exists() and idp_progress_file.exists():
             results.ok('断点续跑会保留已有状态文件')
         else:
             results.fail('断点续跑状态保留', '状态文件被删除')
@@ -752,7 +739,6 @@ def test_configure_resume_target_script():
             '{"status":"downloaded","sequence":2,"file_name":"b.jpg"}\n',
             encoding='utf-8',
         )
-        (cache / 'title.txt').write_text('a\nb\nEND\n', encoding='utf-8')
         (cache / 'a.jpg').write_bytes(b'a')
         (cache / 'b.jpg').write_bytes(b'b')
 
@@ -1058,36 +1044,18 @@ def test_image_validation():
             results.fail('非图片文件', f'被误匹配: {found_names & unexpected}')
 
 
-# ------ 8. title.txt 计数测试（排除 END） ------
+# ------ 8. title.txt 移除回归测试 ------
 
 def test_title_counting():
-    """测试 title.txt 读取时排除 END 标记"""
-    print('\n📋 测试 title.txt 计数')
+    """title.txt 已彻底移除：record_downloaded_image 不再生成它。"""
+    print('\n📋 测试 title.txt 不再生成')
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-
-        # 3 个标题 + END
-        title_file = tmp / 'title.txt'
-        title_file.write_text('Buddhist Temple A\nBuddhist Temple B\nBuddhist Temple C\nEND\n', encoding='utf-8')
-
-        with open(title_file, 'r', encoding='utf-8') as f:
-            title_count = len([line for line in f if line.strip() and line.strip().upper() != 'END'])
-
-        if title_count == 3:
-            results.ok('3 个标题 + END → 计数为 3')
+        if not (tmp / 'title.txt').exists():
+            results.ok('运行目录不再生成 title.txt')
         else:
-            results.fail('title 计数', f'期望 3，得到 {title_count}')
-
-        # 空文件
-        title_file.write_text('END\n', encoding='utf-8')
-        with open(title_file, 'r', encoding='utf-8') as f:
-            title_count = len([line for line in f if line.strip() and line.strip().upper() != 'END'])
-
-        if title_count == 0:
-            results.ok('只有 END → 计数为 0')
-        else:
-            results.fail('空 title 计数', f'期望 0，得到 {title_count}')
+            results.fail('title.txt 移除', 'title.txt 仍被生成')
 
 
 def test_downloaded_record_counting():
@@ -1184,14 +1152,13 @@ def test_generic_image_record_workflow():
             else:
                 results.fail('record_downloaded_image', result.error)
 
-            title_text = (run_dir / 'title.txt').read_text(encoding='utf-8')
             info_text = (run_dir / 'temple_photo_info.md').read_text(encoding='utf-8')
             record_text = (run_dir / 'image_record.jsonl').read_text(encoding='utf-8')
             record = json.loads(record_text.strip())
-            if '寺_001_金堂・本尊_図1' in title_text and 'END' in title_text:
-                results.ok('record_downloaded_image 生成 UTF-8 title.txt')
+            if not (run_dir / 'title.txt').exists():
+                results.ok('record_downloaded_image 不再生成 title.txt')
             else:
-                results.fail('title.txt 生成', title_text)
+                results.fail('title.txt 移除', 'record_downloaded_image 仍生成 title.txt')
 
             if (
                 '金堂・本尊' in info_text
@@ -1369,7 +1336,7 @@ def main():
     test_plain_border_trimming()
     test_kyohaku_method_strategy()
     test_run_limit_configuration()
-    test_title_end_marker()
+    test_title_end_marker_removed()
     test_prepare_runtime_state_resume()
     test_select_active_cache_dir_archives_old_cache()
     test_move_images_unicode_filename()

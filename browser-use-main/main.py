@@ -81,7 +81,7 @@ def build_browser(image_dir) -> Browser:
     """
     proxy = _build_proxy_from_env()
 
-    # 方案C：注入 Scrapling 取得的 cf_clearance 等 cookie（storage_state），
+    # 主方案：注入 Scrapling 取得的 cf_clearance 等 cookie（storage_state），
     # 让浏览器揣着"已通过人机验证的通行证"进站，跳过 Cloudflare Turnstile。
     # 由 fetch_cf_cookie.py 产出；未设置或文件不存在则忽略（零破坏回退）。
     storage_state = None
@@ -90,8 +90,8 @@ def build_browser(image_dir) -> Browser:
     if storage_state_path:
         if Path(storage_state_path).exists():
             storage_state = storage_state_path
-            print(f"🍪 注入 cf_clearance 通行证（storage_state）：{storage_state_path}")
-            print("     ⚠️  cf_clearance 与签发它的出口 IP 绑定，请确保本次出口 IP 与取证时一致。")
+            print(f"🍪 注入 cf_clearance 通行证(storage_state):{storage_state_path}")
+            print("⚠️  cf_clearance 与签发它的出口 IP 绑定，请确保本次出口 IP 与取证时一致。")
             # cf_clearance 轻度绑 UA：复用取证时的 User-Agent，避免 Cloudflare 拒收通行证。
             try:
                 _meta = json.loads(Path(storage_state_path).read_text(encoding='utf-8')).get('_meta', {})
@@ -99,7 +99,7 @@ def build_browser(image_dir) -> Browser:
             except (json.JSONDecodeError, OSError):
                 cf_user_agent = None
             if cf_user_agent:
-                print(f"     🧬 对齐取证 User-Agent：{cf_user_agent}")
+                print(f"🧬 对齐取证 User-Agent:{cf_user_agent}")
         else:
             print(f"⚠️  IDP_STORAGE_STATE 指向的文件不存在：{storage_state_path}，本次不注入 cookie")
 
@@ -120,7 +120,7 @@ def build_browser(image_dir) -> Browser:
             f"\n     profile_directory={profile_directory}"
             + (f"\n     proxy={proxy.server}" if proxy else "")
         )
-        print("     ⚠️  请确保已完全关闭该 Chrome，否则 profile 被占用会启动失败。")
+        print("⚠️  请确保已完全关闭该 Chrome,否则 profile 被占用会启动失败。")
         return Browser(
             executable_path=executable_path,
             user_data_dir=user_data_dir,
@@ -431,13 +431,12 @@ def backup_runtime_state(run_dir: Path, files: list[Path]) -> Path | None:
     return backup_dir
 
 
-def prepare_runtime_state(run_dir: Path, reset_state: bool = True) -> tuple[Path, Path, Path]:
+def prepare_runtime_state(run_dir: Path, reset_state: bool = True) -> tuple[Path, Path]:
     """
     初始化本次运行需要的目录和状态文件，避免旧结果污染长任务。
     """
     image_dir = run_dir
     agent_data_dir = run_dir
-    title_file = run_dir / 'title.txt'
     rename_record_file = run_dir / 'rename_record.txt'
     image_record_file = run_dir / 'image_record.jsonl'
     temple_info_file = run_dir / 'temple_photo_info.md'
@@ -449,7 +448,7 @@ def prepare_runtime_state(run_dir: Path, reset_state: bool = True) -> tuple[Path
     if reset_state:
         backup_dir = backup_runtime_state(
             run_dir,
-            [title_file, rename_record_file, image_record_file, temple_info_file, kyohaku_strategy_file, idp_progress_file],
+            [rename_record_file, image_record_file, temple_info_file, kyohaku_strategy_file, idp_progress_file],
         )
         if backup_dir:
             print(f"🛟 已完整备份旧 ImagesCache 到：{backup_dir}")
@@ -464,18 +463,7 @@ def prepare_runtime_state(run_dir: Path, reset_state: bool = True) -> tuple[Path
             else:
                 path.unlink()
 
-    return image_dir, agent_data_dir, title_file
-
-
-def count_titles(title_file: Path) -> int:
-    """
-    统计 title.txt 中的有效标题数量（排除空行和 END）。
-    """
-    if not title_file.exists():
-        return 0
-
-    with open(title_file, 'r', encoding='utf-8') as f:
-        return len([line for line in f if line.strip() and line.strip().upper() != 'END'])
+    return image_dir, agent_data_dir
 
 
 def count_downloaded_records(record_file: Path) -> int:
@@ -702,7 +690,7 @@ def build_resume_task_context(base_dir: Path, target_image_count: int, search_ke
         f"标题 `{last_record.get('collection_title') or last_record.get('title') or ''}`，"
         f"页面 `{last_record.get('page_url', '')}`\n\n"
         "续跑规则：\n"
-        "1. 不要清空 image 目录、title.txt、image_record.jsonl 或 temple_photo_info.md。\n"
+        "1. 不要清空 image 目录、image_record.jsonl 或 temple_photo_info.md。\n"
         "2. 重复判断由下载工具基于 image_record.jsonl 内存索引执行；不要要求自己记忆历史 URL，也不要回头重扫旧页。\n"
         "3. 如果误点到已处理详情页，调用工具后返回“图片 URL 已有下载记录”或“详情页已处理”时，视为成功跳过并继续下一条。\n"
         f"4. 第一次保存新图片时传入 sequence={next_sequence}，之后按安全序号递增；如果工具自动修正序号，以工具返回为准；目标以有效记录数量为准，不以文件夹文件数或最大序号为准。\n"
@@ -779,34 +767,10 @@ async def run_idp_resume_preflight(
         print(batch_result.extracted_content)
 
 
-def ensure_title_end_marker(title_file: Path) -> bool:
-    """
-    如果 title.txt 已经有标题但没有 END，补写 END 标记。
-    """
-    if not title_file.exists():
-        return False
-
-    lines = title_file.read_text(encoding='utf-8').splitlines()
-    meaningful_lines = [line.strip() for line in lines if line.strip()]
-    if not meaningful_lines:
-        return False
-
-    if meaningful_lines[-1].upper() == 'END':
-        return False
-
-    with open(title_file, 'a', encoding='utf-8') as f:
-        if not title_file.read_text(encoding='utf-8').endswith('\n'):
-            f.write('\n')
-        f.write('END\n')
-
-    return True
-
-
 async def finalize_download_run(
     history,
     *,
     should_quit: bool,
-    title_file: Path,
     image_dir: Path,
     agent_data_dir: Path,
     target_image_count: int,
@@ -814,9 +778,6 @@ async def finalize_download_run(
     """
     无论正常结束还是用户手动停止，都执行状态重建、验证和自动重命名。
     """
-    if ensure_title_end_marker(title_file):
-        print(f"✅ 已为标题文件补写 END 标记：{title_file}")
-
     if should_quit:
         print("\n🛑 程序已被用户手动停止，继续执行收尾验证和重命名")
 
@@ -831,12 +792,11 @@ async def finalize_download_run(
     else:
         print(f"ℹ️ 目录不存在：{image_dir}")
 
-    title_count = count_titles(title_file)
     structured_record_file = agent_data_dir / 'image_record.jsonl'
     downloaded_record_count = count_downloaded_records(structured_record_file)
     print(
         f"\n📊 结果汇总：目标 {target_image_count} 张，"
-        f"已记录标题 {title_count} 个，结构化记录 {downloaded_record_count} 条，已下载图片 {len(all_image_files)} 个"
+        f"结构化记录 {downloaded_record_count} 条，已下载图片 {len(all_image_files)} 个"
     )
 
     if all_image_files:
@@ -848,10 +808,6 @@ async def finalize_download_run(
                 print(f"  ⚠️ 警告：{img_file.name} 文件大小为 0")
     else:
         print("❌ 未找到任何下载的文件")
-        if title_file.exists():
-            print(f"✓ title.txt 存在，包含 {title_count} 个标题")
-        else:
-            print("⚠️ title.txt 不存在")
 
     errors = history.errors()
     if any(errors):
@@ -901,8 +857,8 @@ async def finalize_download_run(
         write_final_validation()
         return
 
-    if title_count == 0 and downloaded_record_count == 0:
-        print("💡 未收集到标题或下载记录，跳过自动重命名")
+    if downloaded_record_count == 0:
+        print("💡 未收集到下载记录，跳过自动重命名")
         write_final_validation()
         return
 
@@ -1080,7 +1036,7 @@ async def run_agent_once(resume_run_override: bool | None = None):
     await asyncio.sleep(1)
     
     # === 3. 初始化本次运行状态并创建浏览器与 llm 实例 ===
-    image_dir, agent_data_dir, title_file = prepare_runtime_state(run_dir, reset_state=False)
+    image_dir, agent_data_dir = prepare_runtime_state(run_dir, reset_state=False)
     if resume_run:
         active = sync_idp_progress_from_page_queue(run_dir, target_image_count, search_keyword)
         print(f"✅ 已从 idp_page_progress.json 选择续跑页：page={active['page']}, start_index={active['next_index']}")
@@ -1138,7 +1094,6 @@ async def run_agent_once(resume_run_override: bool | None = None):
             str(agent_data_dir),
             str(BASE_DIR / 'Information.md'),
             str(BASE_DIR / 'source.html'),
-            str(title_file),
         ],
     )
     
@@ -1168,7 +1123,6 @@ async def run_agent_once(resume_run_override: bool | None = None):
     await finalize_download_run(
         history,
         should_quit=should_quit,
-        title_file=title_file,
         image_dir=image_dir,
         agent_data_dir=agent_data_dir,
         target_image_count=target_image_count,

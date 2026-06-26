@@ -19,7 +19,6 @@ from tools_registry import (
     IMAGE_DIR,
     Path,
     RecordDownloadedImageParams,
-    _append_download_title,
     _browser_fetch_image_to_file,
     _current_tiff_files,
     _download_file,
@@ -54,6 +53,23 @@ from tools_registry import (
 
 
 KYOHAKU_METHODS = ('python_direct', 'browser_context_fetch', 'clean_screenshot')
+
+
+def _append_download_title(title: str, title_file: Path | None = None) -> Path:
+    """
+    Legacy LOC/Kyohaku 专用：将成功下载的图片标题追加写入 title.txt。
+    （通用核心已移除 title.txt，本函数仅供默认关闭的 legacy 工具使用。）
+    """
+    target_file = title_file or AGENT_DATA_DIR / 'title.txt'
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+
+    normalized_title = _normalize_title(title)
+    existing_content = target_file.read_text(encoding='utf-8') if target_file.exists() else ''
+    prefix = '' if not existing_content or existing_content.endswith('\n') else '\n'
+    with open(target_file, 'a', encoding='utf-8') as f:
+        f.write(f'{prefix}{normalized_title}\n')
+
+    return target_file
 
 
 KYOHAKU_STRATEGY_LOCK_THRESHOLD = 5

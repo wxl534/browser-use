@@ -43,7 +43,7 @@ from tools_registry import (
     description=(
         '通用图片下载并记录工具：可自动从当前页面提取公网图片 URL，也可接收明确的图片直链、IIIF manifest、IIIF 大图 URL 或 viewer 图片 URL；'
         '按学习到的优先顺序依次尝试 Python 直连、浏览器上下文 fetch、干净截图裁剪兜底，'
-        '保存到 image 目录，并同步写入 image_record.jsonl、title.txt 和 temple_photo_info.md。'
+        '保存到 ImagesCache 缓存目录，并同步写入 image_record.jsonl 和 temple_photo_info.md。'
         '适用于任意"搜索栏 + item 列表"的图库站点：站点专属加速（如 URL→IIIF manifest 推导）通过站点 hint 自动注入，'
         '未注册站点或传入 force_generic=True 时会回退到"图片直链 + DOM 候选 + 截图兜底"的通用路径。'
     ),

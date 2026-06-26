@@ -103,30 +103,21 @@ def write_json(path: Path, value: dict) -> None:
 
 def build_report(cache_dir: Path, target_count: int, records: list[dict]) -> str:
     downloaded_records = len([record for record in records if record.get('status') == 'downloaded'])
-    titles_file = cache_dir / 'title.txt'
-    title_count = 0
-    if titles_file.exists():
-        title_count = len([
-            line for line in titles_file.read_text(encoding='utf-8').splitlines()
-            if line.strip() and line.strip().upper() != 'END'
-        ])
     image_count = len(image_files(cache_dir))
     seqs = set(sequence_values(records))
     missing = [value for value in range(1, target_count + 1) if value not in seqs]
-    complete = downloaded_records >= target_count and title_count >= target_count and image_count >= target_count
+    complete = downloaded_records >= target_count and image_count >= target_count
     lines = [
         f'Final download validation: {"SUCCESS" if complete else "INCOMPLETE"}',
         f'- target_count: {target_count}',
         f'- downloaded_records: {downloaded_records}',
         f'- remaining_records_needed: {max(0, target_count - downloaded_records)}',
-        f'- title_txt_entries: {title_count}',
         f'- image_files: {image_count}',
         f'- sequence_gaps_warning_only: {missing[:200] if missing else "none"}',
         '- bad_or_empty_images: not_checked_by_configure_resume_target',
         '- duplicate_image_hash_groups: not_checked_by_configure_resume_target',
         '- orphan_files_warning_only: not_checked_by_configure_resume_target',
         f'- record_file: {cache_dir / "image_record.jsonl"}',
-        f'- title_file: {cache_dir / "title.txt"}',
     ]
     return '\n'.join(lines)
 

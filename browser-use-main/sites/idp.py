@@ -130,7 +130,7 @@ class DownloadCurrentIdpSearchPageImagesParams(BaseModel):
     start_index: int = Field(default=0, ge=0, description='从当前搜索页第几个结果开始处理，0 表示第一个')
     images_per_item: int = Field(default=1, ge=1, le=5, description='每个藏品最多保存几张图片，默认只保存主图')
     file_prefix: str = Field(default='temple', description='保存文件名前缀，例如 temple')
-    title_prefix: str = Field(default='china_temple', description='title.txt 中的标题前缀')
+    title_prefix: str = Field(default='china_temple', description='图片标题/文件名前缀')
     allowed_host_suffixes: list[str] = Field(
         default_factory=lambda: ['idp.bl.uk', 'data.idp.bl.uk', 'bl.uk'],
         description='允许下载的官方域名后缀',

@@ -85,12 +85,21 @@ def build_browser(image_dir) -> Browser:
     # 让浏览器揣着"已通过人机验证的通行证"进站，跳过 Cloudflare Turnstile。
     # 由 fetch_cf_cookie.py 产出；未设置或文件不存在则忽略（零破坏回退）。
     storage_state = None
+    cf_user_agent = None
     storage_state_path = os.environ.get('IDP_STORAGE_STATE', '').strip()
     if storage_state_path:
         if Path(storage_state_path).exists():
             storage_state = storage_state_path
             print(f"🍪 注入 cf_clearance 通行证（storage_state）：{storage_state_path}")
             print("     ⚠️  cf_clearance 与签发它的出口 IP 绑定，请确保本次出口 IP 与取证时一致。")
+            # cf_clearance 轻度绑 UA：复用取证时的 User-Agent，避免 Cloudflare 拒收通行证。
+            try:
+                _meta = json.loads(Path(storage_state_path).read_text(encoding='utf-8')).get('_meta', {})
+                cf_user_agent = (_meta or {}).get('user_agent') or None
+            except (json.JSONDecodeError, OSError):
+                cf_user_agent = None
+            if cf_user_agent:
+                print(f"     🧬 对齐取证 User-Agent：{cf_user_agent}")
         else:
             print(f"⚠️  IDP_STORAGE_STATE 指向的文件不存在：{storage_state_path}，本次不注入 cookie")
 
@@ -122,6 +131,7 @@ def build_browser(image_dir) -> Browser:
             downloads_path=str(image_dir),
             proxy=proxy,
             storage_state=storage_state,
+            user_agent=cf_user_agent,
         )
 
     # 回退：内置 Chromium + 项目内 browser_profile（与原行为一致）
@@ -136,6 +146,7 @@ def build_browser(image_dir) -> Browser:
         downloads_path=str(image_dir),  # 下载文件保存到 image 目录
         proxy=proxy,
         storage_state=storage_state,
+        user_agent=cf_user_agent,
     )
 
 

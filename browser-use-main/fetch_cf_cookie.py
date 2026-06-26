@@ -140,6 +140,10 @@ def main() -> int:
     cookies = _normalize_cookies(getattr(response, 'cookies', ()))
     has_cf = any(c['name'] == 'cf_clearance' for c in cookies)
     expiry = _cf_clearance_expiry(cookies)
+    # 记录取证时实际使用的 User-Agent —— cf_clearance 轻度绑指纹/UA，注入时让
+    # browser-use 用同一个 UA，避免 Cloudflare 因 UA 不一致而拒收通行证。
+    request_headers = getattr(response, 'request_headers', None) or {}
+    user_agent = request_headers.get('user-agent') or request_headers.get('User-Agent')
 
     storage_state = {
         'cookies': cookies,
@@ -149,6 +153,7 @@ def main() -> int:
             'source': 'scrapling.StealthyFetcher',
             'url': url,
             'status': status,
+            'user_agent': user_agent,
             'fetched_at': int(started),
             'fetched_at_iso': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(started)),
             'cf_clearance_present': has_cf,
@@ -162,6 +167,7 @@ def main() -> int:
 
     elapsed = time.time() - started
     print(f'     HTTP status={status}  cookies={len(cookies)}  用时={elapsed:.1f}s')
+    print(f'     User-Agent={user_agent or "（未捕获）"}')
     print(f'     写入 storage_state → {out_path}')
 
     if has_cf:

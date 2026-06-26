@@ -202,6 +202,21 @@ class NavigateIdpSearchPageParams(BaseModel):
     limit: str | int = Field(default=50, description='每页条数；工具会限制到 1-100')
 
 
+class NextSearchItemParams(BaseModel):
+    """next_search_item（统一发号）工具的参数模型。"""
+    keyword: str = Field(default='', description='当前搜索关键词，仅用于在游标文件里标注，可留空')
+    item_selector: str = Field(
+        default='',
+        description='搜索结果页中 item 详情链接的 CSS 选择器；留空时按当前站点已注册的 hint 自动选择（如 IDP 用 a[href*="/collection/"]）',
+    )
+    mark_done_url: str = Field(
+        default='',
+        description='可选：刚刚处理完（已下载或主动跳过）的那个 item 的详情页 URL；传入后会标记为已处理再发下一个',
+    )
+    record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名，用于交叉核对已下载的 item')
+    max_scan: int = Field(default=500, ge=1, le=2000, description='单页最多枚举多少个 item')
+
+
 class DownloadCurrentIdpSearchPageImagesParams(BaseModel):
     """批量下载当前 IDP 搜索结果页中的图片。"""
     target_count: int = Field(default=1000, ge=1, description='总目标有效记录数，达到后自动停止')
@@ -1497,16 +1512,20 @@ def register_download_site_hint(
     *,
     manifest_from_page_url=None,
     is_invalid_collection_url=None,
+    item_link_selector: str = '',
 ) -> None:
     """
-    注册某站点的下载 hint：从详情页 URL 推导 IIIF manifest、以及非法 collection URL 判定。
-    download_image_from_url 通过通用分发调用这些 hint，新增站点只需在此注册，无需改下载工具本身。
+    注册某站点的下载 hint：从详情页 URL 推导 IIIF manifest、非法 collection URL 判定，
+    以及搜索结果页中"item 详情链接"的 CSS 选择器（供 next_search_item 按 DOM 顺序枚举本页 item）。
+    download_image_from_url / next_search_item 通过通用分发调用这些 hint，新增站点只需在此注册，
+    无需改下载/发号工具本身。
     """
     normalized_hosts = tuple(h.strip().lower() for h in hosts if h and h.strip())
     _SITE_DOWNLOAD_HINTS.append({
         'hosts': normalized_hosts,
         'manifest': manifest_from_page_url,
         'invalid_collection': is_invalid_collection_url,
+        'item_link_selector': (item_link_selector or '').strip(),
     })
 
 
@@ -1548,11 +1567,21 @@ def _site_invalid_collection_url(url: str) -> bool:
     return False
 
 
+def _site_item_selector(url: str) -> str:
+    """通用分发：返回该站点搜索结果页"item 详情链接"的 CSS 选择器；无则空串。"""
+    for hint in _matching_site_hints(url):
+        selector = (hint.get('item_link_selector') or '').strip()
+        if selector:
+            return selector
+    return ''
+
+
 # 注册 idp.bl.uk 的下载 hint（复用现有 IDP helper，行为保持不变）。
 register_download_site_hint(
     ['idp.bl.uk', 'data.idp.bl.uk'],
     manifest_from_page_url=_idp_manifest_url_from_page_url,
     is_invalid_collection_url=_is_invalid_idp_collection_url,
+    item_link_selector='a[href*="/collection/"]',
 )
 
 
@@ -3580,6 +3609,190 @@ async def _current_browser_url(browser_session) -> str:
     return str(result.get('result', {}).get('value') or '')
 
 
+# ---------------------------------------------------------------------------
+# 搜索结果页 item 游标（next_search_item 工具用）
+#
+# 解决"逐 item 通用下载流程没有页内序号游标"的缺口：进入搜索结果页后按 DOM 顺序
+# （左→右、上→下）枚举本页所有 item，以 image_record.jsonl（真实下载记录）+ 本游标
+# 文件为"已处理"事实来源，统一发号"下一个该处理的 item 序号 + URL"，避免 LLM 忘记
+# 处理到哪个而导致的错位 / 跳过 / 重复循环。
+# ---------------------------------------------------------------------------
+
+SEARCH_ITEM_CURSOR_FILE = 'search_item_cursor.json'
+
+
+def _search_item_cursor_file() -> Path:
+    return AGENT_DATA_DIR / SEARCH_ITEM_CURSOR_FILE
+
+
+def _load_search_item_cursor() -> dict:
+    cursor_file = _search_item_cursor_file()
+    if not cursor_file.exists():
+        return {}
+    try:
+        data = json_module.loads(cursor_file.read_text(encoding='utf-8'))
+    except json_module.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_search_item_cursor(data: dict) -> Path:
+    cursor_file = _search_item_cursor_file()
+    cursor_file.parent.mkdir(parents=True, exist_ok=True)
+    cursor_file.write_text(
+        json_module.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8'
+    )
+    return cursor_file
+
+
+_SEARCH_ITEM_ENUM_JS_TEMPLATE = r'''
+(function() {
+    try {
+        const selector = __SELECTOR__;
+        const seen = new Set();
+        const items = [];
+        const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+        const nodes = document.querySelectorAll(selector);
+        for (const link of nodes) {
+            const href = link.href || link.getAttribute('href') || '';
+            let url;
+            try {
+                url = new URL(href, window.location.href).href;
+            } catch (_) {
+                continue;
+            }
+            // 归一化：去 fragment、去末尾斜杠，与 Python 端 _normalize_source_url 对齐
+            let key = url.split('#')[0];
+            if (key.length > 1 && key.endsWith('/')) key = key.slice(0, -1);
+            key = key.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const container = link.closest('article, li, .card, .result, .item, .collection-item') || link;
+            const title = clean(
+                link.getAttribute('title') ||
+                link.textContent ||
+                (container && container.getAttribute && container.getAttribute('aria-label')) ||
+                (container && container.textContent) ||
+                ''
+            );
+            items.push({ url: url, title: title.slice(0, 300) });
+        }
+        return {
+            success: true,
+            page_url: window.location.href,
+            page_title: document.title,
+            total_found: items.length,
+            items: items.slice(0, __CAP__),
+        };
+    } catch (error) {
+        return { success: false, error: String(error && error.message || error) };
+    }
+})()
+'''
+
+
+def _build_search_item_enum_js(selector: str, cap: int) -> str:
+    return (
+        _SEARCH_ITEM_ENUM_JS_TEMPLATE
+        .replace('__SELECTOR__', json_module.dumps(selector))
+        .replace('__CAP__', json_module.dumps(int(cap)))
+    )
+
+
+async def _enumerate_current_page_items(browser_session, selector: str, cap: int = 500) -> dict:
+    """在当前 tab 按 DOM 顺序（左→右、上→下）枚举 item 详情链接，去重后返回有序清单。"""
+    js_code = _build_search_item_enum_js(selector, cap)
+    cdp_session = await browser_session.get_or_create_cdp_session()
+    result = await cdp_session.cdp_client.send.Runtime.evaluate(
+        params={'expression': js_code, 'returnByValue': True, 'awaitPromise': True},
+        session_id=cdp_session.session_id,
+    )
+    if result.get('exceptionDetails'):
+        exc = result['exceptionDetails']
+        detail = (exc.get('exception') or {}).get('description') or exc.get('text') or '页面 item 枚举失败'
+        return {'success': False, 'error': str(detail), 'items': []}
+    data = result.get('result', {}).get('value') or {}
+    if not isinstance(data, dict):
+        return {'success': False, 'error': '页面 item 枚举返回异常', 'items': []}
+    return data
+
+
+def _recorded_page_urls(record_filename: str = 'image_record.jsonl') -> set[str]:
+    """从 image_record.jsonl 收集已成功下载过的 item 详情页 URL（归一化），作为已处理事实来源。"""
+    processed: set[str] = set()
+    for record in _load_image_records(_image_record_file(record_filename)):
+        page_url = record.get('page_url') or ''
+        if page_url:
+            processed.add(_normalize_source_url(page_url))
+    return processed
+
+
+def _select_next_search_item(
+    *,
+    items: list[dict],
+    current_page_url: str,
+    keyword: str,
+    mark_done_url: str = '',
+    record_filename: str = 'image_record.jsonl',
+) -> dict:
+    """
+    统一发号核心逻辑：
+    - 以"游标 done 集合 ∪ image_record.jsonl 中已记录的 page_url"为已处理事实来源；
+    - 返回 DOM 顺序里第一个未处理的 item（序号 + URL + title）；全处理完则标记本页 done。
+    游标按归一化后的搜索结果页 URL 作 key，跨调用 / 跨进程续跑稳定。
+    """
+    page_key = _normalize_source_url(current_page_url)
+    cursor = _load_search_item_cursor()
+    cursor.setdefault('pages', {})
+    page_state = cursor['pages'].setdefault(page_key, {
+        'page_url': current_page_url,
+        'done': [],
+        'handed': [],
+    })
+    page_state['page_url'] = current_page_url
+
+    done_set = {_normalize_source_url(u) for u in page_state.get('done') or []}
+    if mark_done_url:
+        norm_done = _normalize_source_url(mark_done_url)
+        if norm_done and norm_done not in done_set:
+            done_set.add(norm_done)
+            page_state.setdefault('done', []).append(mark_done_url)
+
+    processed = done_set | _recorded_page_urls(record_filename)
+
+    ordered = [it for it in items if isinstance(it, dict) and it.get('url')]
+    next_item = None
+    next_index = -1
+    for idx, it in enumerate(ordered):
+        if _normalize_source_url(it['url']) not in processed:
+            next_item = it
+            next_index = idx
+            break
+
+    processed_count = sum(1 for it in ordered if _normalize_source_url(it['url']) in processed)
+    page_state['total_found'] = len(ordered)
+    page_state['processed_count'] = processed_count
+    page_state['next_index'] = next_index if next_index >= 0 else len(ordered)
+    page_state['updated_at'] = datetime.now(timezone.utc).isoformat()
+    if next_item is not None:
+        handed = page_state.setdefault('handed', [])
+        if next_item['url'] not in handed:
+            handed.append(next_item['url'])
+    else:
+        page_state['status'] = 'done'
+
+    cursor['keyword'] = keyword
+    cursor['active_page_url'] = current_page_url
+    cursor['updated_at'] = page_state['updated_at']
+    _write_search_item_cursor(cursor)
+
+    return {
+        'next_item': next_item,
+        'next_index': next_index,
+        'total_found': len(ordered),
+        'processed_count': processed_count,
+        'page_key': page_key,
+    }
 
 
 def _generic_image_strategy_file() -> Path:
@@ -4721,6 +4934,7 @@ from tool_actions.record_downloaded_image import record_downloaded_image  # noqa
 from tool_actions.validate_download_completion import validate_download_completion  # noqa: E402,F401
 from tool_actions.finish_download_task import finish_download_task  # noqa: E402,F401
 from tool_actions.navigate_idp_search_page import navigate_idp_search_page  # noqa: E402,F401
+from tool_actions.next_search_item import next_search_item  # noqa: E402,F401
 from tool_actions.download_current_idp_search_page_images import download_current_idp_search_page_images  # noqa: E402,F401
 from tool_actions.download_image_from_url import download_image_from_url  # noqa: E402,F401
 from tool_actions.extract_page_to_markdown import extract_page_to_markdown  # noqa: E402,F401

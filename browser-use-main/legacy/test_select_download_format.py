@@ -25,17 +25,19 @@ sys.path.insert(0, str(PROJECT_DIR))
 import tools_registry
 from tools_registry import (
     ExtractPageContentParams,
+    WaitForHumanVerificationParams,
+    registry,
+    wait_for_human_verification,
+)
+from legacy.site_tools import (
     GetNextLocQueueItemParams,
     MarkLocQueueItemParams,
     RebuildLocDownloadStateParams,
     SelectDownloadFormatParams,
-    WaitForHumanVerificationParams,
     get_next_loc_queue_item,
     mark_loc_queue_item,
     rebuild_loc_download_state,
-    registry,
     select_download_format,
-    wait_for_human_verification,
 )
 
 

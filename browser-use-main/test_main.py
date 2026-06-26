@@ -466,7 +466,7 @@ def test_kyohaku_method_strategy():
     print('\n📋 测试 Kyohaku 下载方法策略')
 
     import tools_registry
-    from tools_registry import (
+    from legacy.site_tools import (
         _load_kyohaku_strategy,
         _ordered_kyohaku_methods,
         _record_kyohaku_method_failure,

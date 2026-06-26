@@ -457,7 +457,7 @@ async def _download_file(
 
 async def _get_browser_cookie_header(browser_session, urls: list[str]) -> str:
     """
-    从当前浏览器会话提取相关 URL 的 Cookie，供 Python 直接下载使用。
+    从当前浏览器会话提取相关 URL 的 Cookie,供 Python 直接下载使用。
     """
     try:
         cdp_session = await browser_session.get_or_create_cdp_session()
@@ -519,11 +519,11 @@ def _max_downloaded_record_sequence(record_filename: str = 'image_record.jsonl')
     max_sequence = 0
     for record in _load_image_records(_image_record_file(record_filename)):
         if record.get('status') != 'downloaded':
-        	continue
+            continue
         try:
-        	max_sequence = max(max_sequence, int(record.get('sequence') or 0))
+            max_sequence = max(max_sequence, int(record.get('sequence') or 0))
         except (TypeError, ValueError):
-        	continue
+            continue
     return max_sequence
 
 
@@ -538,14 +538,14 @@ def _max_image_file_sequence(file_prefix: str = 'temple') -> int:
         return 0
     for path in IMAGE_DIR.iterdir():
         if not path.is_file():
-        	continue
+            continue
         match = pattern.match(path.stem)
         if not match:
-        	continue
+            continue
         try:
-        	max_sequence = max(max_sequence, int(match.group(1)))
+            max_sequence = max(max_sequence, int(match.group(1)))
         except ValueError:
-        	continue
+            continue
     return max_sequence
 
 

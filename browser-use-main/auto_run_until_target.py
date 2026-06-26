@@ -381,28 +381,77 @@ def configure_before_run(
     *,
     keyword_override: str | None = None,
     target_override: int | None = None,
+    site_override: str | None = None,
+    allowed_hosts_override: str | None = None,
+    mode_override: str | None = None,
+    item_selector_override: str | None = None,
+    force_generic_override: bool | None = None,
 ) -> bool:
-    # 非交互模式：由 GUI/脚本通过参数传入关键词/目标，或在没有 TTY 时不再阻塞 input()。
+    import re
+
+    import render_task
+
+    # 非交互模式：由 GUI/脚本通过任一任务参数传入，或在没有 TTY 时不再阻塞 input()。
     non_interactive = (
-        keyword_override is not None
-        or target_override is not None
+        any(value is not None for value in (
+            keyword_override, target_override, site_override, allowed_hosts_override,
+            mode_override, item_selector_override, force_generic_override,
+        ))
         or not sys.stdin.isatty()
     )
 
-    if keyword_override is not None:
-        apply_keyword_change(cache_dir, keyword_override)
-    elif not non_interactive and yes_or_no('是否要修改搜索词？[y/N]: '):
-        new_keyword = input('请输入新的搜索词: ').strip()
-        apply_keyword_change(cache_dir, new_keyword)
+    cfg = render_task.load_config()
+    # 与现有 task.md 保持连续：未显式覆盖时，沿用 task.md 当前的关键词/目标，
+    # 避免渲染把运行中途改过的值重置回 task_config.json 旧值。
+    if TASK_FILE.exists():
+        task_text = TASK_FILE.read_text(encoding='utf-8')
+        current_keyword = detect_search_keyword(task_text)
+        current_target = detect_task_target(task_text)
+        if keyword_override is None and current_keyword:
+            cfg['keyword'] = current_keyword
+        if target_override is None and current_target:
+            cfg['target_count'] = current_target
 
-    if target_override is not None:
-        summary = configure_target(cache_dir, int(target_override), update_task=True)
+    # 搜索词：变更则归档旧缓存 + 更新缓存内关键词（task.md 最终由渲染器统一写）。
+    new_keyword = keyword_override
+    if new_keyword is None and not non_interactive and yes_or_no('是否要修改搜索词？[y/N]: '):
+        new_keyword = input('请输入新的搜索词: ').strip()
+    if new_keyword:
+        new_keyword = re.sub(r'\s+', ' ', new_keyword).strip()
+        old_keyword = cfg['keyword']
+        if keyword_changed(old_keyword, new_keyword):
+            archive_cache_for_keyword_change(cache_dir, old_keyword, new_keyword)
+            update_cache_keyword(cache_dir, new_keyword)
+        cfg['keyword'] = new_keyword
+
+    # 目标值：更新缓存断点状态（idp_progress / run_config）；task.md 由渲染器统一写。
+    new_target = target_override
+    if new_target is None and not non_interactive and yes_or_no('是否要修改目标下载数量？[y/N]: '):
+        new_target = int(input('请输入新的目标总下载数量: ').strip())
+    if new_target is not None:
+        summary = configure_target(cache_dir, int(new_target), update_task=False)
         print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
-    elif not non_interactive and yes_or_no('是否要修改目标下载数量？[y/N]: '):
-        target_text = input('请输入新的目标总下载数量: ').strip()
-        target_count = int(target_text)
-        summary = configure_target(cache_dir, target_count, update_task=True)
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        cfg['target_count'] = int(new_target)
+
+    # 其它任务参数（站点 / 白名单 / 模式 / item 选择器 / force_generic）。
+    if site_override is not None:
+        cfg['site_url'] = site_override
+    if allowed_hosts_override is not None:
+        cfg['allowed_hosts'] = [h.strip() for h in allowed_hosts_override.split(',') if h.strip()]
+    if mode_override is not None:
+        cfg['mode'] = mode_override
+    if item_selector_override is not None:
+        cfg['item_selector'] = item_selector_override
+    if force_generic_override is not None:
+        cfg['force_generic'] = bool(force_generic_override)
+
+    # 单一真相源写回 + 权威渲染 task.md（task.md 不再手改）。
+    cfg = render_task.normalize_config(cfg)
+    render_task.save_config(cfg)
+    render_task.render_to_task(cfg)
+    print(f'📝 已从 task_template.md 渲染 task.md（keyword={cfg["keyword"]!r}, '
+          f'target={cfg["target_count"]}, mode={cfg["mode"]}, force_generic={cfg["force_generic"]}）', flush=True)
+
     if resume_choice is not None:
         print('♻️ 已通过参数选择断点续跑' if resume_choice else '🆕 已通过参数选择从头开始')
         return resume_choice
@@ -812,6 +861,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--cache-dir', type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument('--keyword', type=str, default=None, help='非交互地设置搜索词；与当前不同则归档旧缓存并改写 task.md')
     parser.add_argument('--target', type=int, default=None, help='非交互地设置目标下载总数并写入 task.md')
+    parser.add_argument('--site', type=str, default=None, help='目标站点首页 URL（写入 task_config.json 并渲染 task.md）')
+    parser.add_argument('--allowed-hosts', type=str, default=None, help='允许下载的域名后缀白名单，逗号分隔')
+    parser.add_argument('--mode', choices=('idp_batch', 'generic_per_item'), default=None,
+                        help='任务模式：idp_batch（站点专属批量）| generic_per_item（任意站点逐 item 稳定路径）')
+    parser.add_argument('--item-selector', type=str, default=None, help='非注册站点的 item 详情链接 CSS 选择器（generic 模式）')
+    fg = parser.add_mutually_exclusive_group()
+    fg.add_argument('--force-generic', dest='force_generic', action='store_true', default=None,
+                    help='通用下载跳过站点专属 manifest 加速（稳定优先）')
+    fg.add_argument('--no-force-generic', dest='force_generic', action='store_false', default=None,
+                    help='关闭 force_generic')
     parser.add_argument('--max-rounds', type=int, default=100)
     parser.add_argument('--max-no-progress-rounds', type=int, default=3)
     parser.add_argument('--sleep-seconds', type=int, default=5)
@@ -920,6 +979,11 @@ def main() -> int:
         resume_choice=resume_choice,
         keyword_override=args.keyword,
         target_override=args.target,
+        site_override=args.site,
+        allowed_hosts_override=args.allowed_hosts,
+        mode_override=args.mode,
+        item_selector_override=args.item_selector,
+        force_generic_override=args.force_generic,
     )
     summary = auto_run_until_target(
         cache_dir=args.cache_dir,

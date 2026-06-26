@@ -34,6 +34,7 @@ from tools_registry import (
     _site_manifest_url_from_page_url,
     _source_hash,
     _titled_image_stem,
+    _validate_public_image_url,
     tools,
 )
 
@@ -97,25 +98,57 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
             manifest_note += f'- 已从详情页 URL 推导 IIIF manifest: {manifest_url_from_page}\n'
 
         if image_url and _looks_like_iiif_manifest_url(image_url):
+            manifest_source_url = image_url
             cookie_header = ''
             if params.use_browser_cookies:
                 try:
                     cookie_header = await _get_browser_cookie_header(browser_session, [image_url, page_url])
                 except Exception:
                     cookie_header = ''
-            resolved_image_url, manifest_candidate_count = await _resolve_iiif_manifest_to_image_url(
-                image_url,
-                allowed_host_suffixes,
-                params.timeout_seconds,
-                referer or page_url or None,
-                cookie_header or None,
-            )
-            manifest_note = (
-                manifest_note +
-                f'- IIIF manifest 已解析为图片 URL: {resolved_image_url}\n'
-                f'- Manifest 图片候选数: {manifest_candidate_count}\n'
-            )
-            image_url = resolved_image_url
+            try:
+                resolved_image_url, manifest_candidate_count = await _resolve_iiif_manifest_to_image_url(
+                    image_url,
+                    allowed_host_suffixes,
+                    params.timeout_seconds,
+                    referer or page_url or None,
+                    cookie_header or None,
+                )
+                manifest_note = (
+                    manifest_note +
+                    f'- IIIF manifest 已解析为图片 URL: {resolved_image_url}\n'
+                    f'- Manifest 图片候选数: {manifest_candidate_count}\n'
+                )
+                image_url = resolved_image_url
+            except Exception as iiif_error:
+                # 兜底：网站没有 IIIF 逻辑 / manifest 损坏 / 非标准 / 网络失败时，
+                # 不让 IIIF 解析失败直接判定整个下载失败，依次回退到页面 DOM 图片直链、
+                # 再到 clean_screenshot 截图；都不可用才报错。
+                fallback_image_url = ''
+                for candidate in candidates:
+                    if not candidate or candidate == manifest_source_url:
+                        continue
+                    if _looks_like_iiif_manifest_url(candidate):
+                        continue
+                    try:
+                        fallback_image_url = _validate_public_image_url(candidate, allowed_host_suffixes)
+                        break
+                    except Exception:
+                        continue
+                if fallback_image_url:
+                    image_url = fallback_image_url
+                    manifest_note += (
+                        f'- ⚠️ IIIF manifest 解析失败（{iiif_error}），已回退到页面图片直链: {image_url}\n'
+                    )
+                elif params.allow_clean_screenshot:
+                    image_url = ''
+                    manifest_note += (
+                        f'- ⚠️ IIIF manifest 解析失败（{iiif_error}）且无可用直链，已回退到 clean_screenshot 截图兜底\n'
+                    )
+                else:
+                    raise RuntimeError(
+                        f'IIIF manifest 解析失败且无兜底可用: {iiif_error}。'
+                        '可传入图片直链、确保页面已显示大图，或允许 clean_screenshot 兜底。'
+                    ) from iiif_error
 
         record_index, existing_image_hashes, index_cache = _get_cached_download_index(params.record_filename)
 

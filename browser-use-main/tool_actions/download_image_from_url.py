@@ -11,12 +11,9 @@ from tools_registry import (
     _choose_reliable_page_url,
     _clean_url_text,
     _extract_generic_image_candidates,
-    _find_downloaded_record_by_file_hash,
-    _find_downloaded_record_by_image_url,
     _find_existing_image_file_by_hash,
     _get_browser_cookie_header,
-    _idp_manifest_url_from_page_url,
-    _is_invalid_idp_collection_url,
+    _get_cached_download_index,
     _load_generic_image_strategy,
     _looks_like_iiif_manifest_url,
     _normalize_border_ratio,
@@ -25,14 +22,17 @@ from tools_registry import (
     _prefix_from_filename,
     _record_generic_image_method_failure,
     _record_generic_image_method_success,
-    _record_saved_kyohaku_image,
+    _record_saved_image_fast,
+    _refresh_generic_index_mtime,
     _renumber_title_if_needed,
     _resolve_generic_image_url,
     _resolve_iiif_manifest_to_image_url,
-    _safe_requested_image_sequence,
+    _safe_requested_image_sequence_from_index,
     _sanitize_allowed_host_suffixes,
     _save_generic_image_by_method,
     _sha256_file,
+    _site_invalid_collection_url,
+    _site_manifest_url_from_page_url,
     tools,
 )
 
@@ -67,12 +67,12 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
                     '如果日志包含 browser not connected / No valid agent focus，请停止当前任务并重启浏览器会话。'
                 ) from e
 
-        if _is_invalid_idp_collection_url(page_url):
+        if _site_invalid_collection_url(page_url):
             page_url, page_url_note = _choose_reliable_page_url(page_url, '')
-        if not page_url and _is_invalid_idp_collection_url(params.page_url) and not params.image_url.strip():
-            return ActionResult(error=f'模型传入的 IDP 详情页 URL 非法，且无法从浏览器获取可信当前页: {params.page_url}')
+        if not page_url and _site_invalid_collection_url(params.page_url) and not params.image_url.strip():
+            return ActionResult(error=f'模型传入的详情页 URL 非法（疑似搜索/列表页），且无法从浏览器获取可信当前页: {params.page_url}')
 
-        manifest_url_from_page = _idp_manifest_url_from_page_url(page_url)
+        manifest_url_from_page = _site_manifest_url_from_page_url(page_url)
         preferred_image_url = _clean_url_text(params.image_url) or manifest_url_from_page
 
         try:
@@ -93,7 +93,7 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
 
         manifest_note = page_url_note
         if manifest_url_from_page and not params.image_url.strip():
-            manifest_note += f'- 已从 IDP 详情页 URL 推导 IIIF manifest: {manifest_url_from_page}\n'
+            manifest_note += f'- 已从详情页 URL 推导 IIIF manifest: {manifest_url_from_page}\n'
 
         if image_url and _looks_like_iiif_manifest_url(image_url):
             cookie_header = ''
@@ -116,7 +116,9 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
             )
             image_url = resolved_image_url
 
-        existing_record = _find_downloaded_record_by_image_url(params.record_filename, image_url)
+        record_index, existing_image_hashes, index_cache = _get_cached_download_index(params.record_filename)
+
+        existing_record = record_index.records_by_image_url.get(image_url) if image_url else None
         if existing_record:
             msg = (
                 f'✅ 图片 URL 已有下载记录，视为当前图片已处理，继续下一条即可\n'
@@ -136,7 +138,7 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
             )
 
         file_prefix = _prefix_from_filename(params.file_name, 'temple')
-        sequence, sequence_note = _safe_requested_image_sequence(params.sequence, params.record_filename, file_prefix)
+        sequence, sequence_note = _safe_requested_image_sequence_from_index(params.sequence, record_index, file_prefix)
         file_name = _numbered_file_stem(params.file_name, sequence, file_prefix)
         title = _renumber_title_if_needed(params.title, sequence)
         border_ratio = _normalize_border_ratio(params.border_ratio)
@@ -176,7 +178,7 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
             return ActionResult(error='通用图片下载失败: ' + '; '.join(attempt_errors))
 
         file_hash = _sha256_file(image_path)
-        existing_content_record = _find_downloaded_record_by_file_hash(params.record_filename, file_hash)
+        existing_content_record = record_index.records_by_file_hash.get(file_hash)
         if existing_content_record:
             image_path.unlink(missing_ok=True)
             existing_file = tr.IMAGE_DIR / Path(str(existing_content_record.get('file_name') or '')).name
@@ -198,8 +200,10 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
                 attachments=attachments,
             )
 
-        existing_image_path = _find_existing_image_file_by_hash(file_hash, exclude_path=image_path)
-        if existing_image_path:
+        existing_image_path = existing_image_hashes.get(file_hash)
+        if existing_image_path is None:
+            existing_image_path = _find_existing_image_file_by_hash(file_hash, exclude_path=image_path)
+        if existing_image_path and existing_image_path.resolve() != image_path.resolve():
             image_path.unlink(missing_ok=True)
             msg = (
                 f'✅ image 目录中已存在相同图片内容，已删除本次重复文件并跳过\n'
@@ -217,7 +221,8 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
                 attachments=[str(existing_image_path)],
             )
 
-        record_result = await _record_saved_kyohaku_image(
+        downloaded_count_before = record_index.downloaded_count
+        record_result = await _record_saved_image_fast(
             image_path=image_path,
             sequence=sequence,
             title=title,
@@ -229,11 +234,21 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
             summary=params.summary,
             record_filename=params.record_filename,
             info_filename=params.info_filename,
+            record_index=record_index,
+            existing_image_hashes=existing_image_hashes,
+            precomputed_file_hash=file_hash,
         )
+        _refresh_generic_index_mtime(index_cache)
         if record_result.error:
             if image_path and image_path.exists():
                 image_path.unlink(missing_ok=True)
             return record_result
+        if record_index.downloaded_count == downloaded_count_before:
+            # 落库环节内部判定为重复（content/source hash），已删除本次文件并跳过。
+            return record_result
+
+        final_record = record_index.records[-1]
+        image_path = tr.IMAGE_DIR / Path(str(final_record.get('file_name') or image_path.name)).name
 
         strategy_after = _record_generic_image_method_success(method, sequence, image_url)
         strategy_note = (

@@ -1374,6 +1374,147 @@ def _build_existing_image_hash_index(record_index: 'DownloadRecordIndex | None' 
     return existing
 
 
+# === 逐项下载工具的缓存索引（避免每张图重读整张 JSONL，把 O(N^2) 降到 O(N)）===
+
+# key: str(record_file) -> {'index', 'existing_image_hashes', 'record_mtime', 'image_dir'}
+_GENERIC_DOWNLOAD_INDEX_CACHE: dict[str, dict] = {}
+
+
+def _record_file_mtime(record_file: Path) -> float:
+    try:
+        return record_file.stat().st_mtime if record_file.exists() else 0.0
+    except OSError:
+        return 0.0
+
+
+def _get_cached_download_index(
+    record_filename: str = 'image_record.jsonl',
+) -> tuple['DownloadRecordIndex', dict[str, Path], dict]:
+    """
+    返回 (内存索引, IMAGE_DIR 的 sha256->Path 索引, 缓存条目)。
+
+    跨多次 download_image_from_url 调用复用：只要 image_record.jsonl 的 mtime
+    和当前 IMAGE_DIR 没变，就直接复用已建好的 O(1) 索引；变了才重建。
+    本工具自己 append 写记录后会调用 _refresh_generic_index_mtime 刷新 mtime，
+    避免把自己的写入误判成外部改动而反复重建。
+    """
+    record_file = _image_record_file(record_filename)
+    key = str(record_file)
+    record_mtime = _record_file_mtime(record_file)
+    image_dir = str(IMAGE_DIR)
+    cached = _GENERIC_DOWNLOAD_INDEX_CACHE.get(key)
+    if (
+        cached is not None
+        and cached.get('record_mtime') == record_mtime
+        and cached.get('image_dir') == image_dir
+    ):
+        return cached['index'], cached['existing_image_hashes'], cached
+
+    index = _build_download_record_index(record_filename)
+    existing_image_hashes = _build_existing_image_hash_index(index)
+    cached = {
+        'index': index,
+        'existing_image_hashes': existing_image_hashes,
+        'record_mtime': record_mtime,
+        'image_dir': image_dir,
+    }
+    _GENERIC_DOWNLOAD_INDEX_CACHE[key] = cached
+    return index, existing_image_hashes, cached
+
+
+def _refresh_generic_index_mtime(cache_entry: dict) -> None:
+    index = cache_entry.get('index')
+    if index is None:
+        return
+    cache_entry['record_mtime'] = _record_file_mtime(index.record_file)
+    cache_entry['image_dir'] = str(IMAGE_DIR)
+
+
+def _safe_requested_image_sequence_from_index(
+    requested_sequence: int,
+    index: 'DownloadRecordIndex',
+    file_prefix: str = 'temple',
+) -> tuple[int, str]:
+    """
+    用内存索引的 max_sequence 取下一安全序号，免重读 JSONL。
+    同时兼顾 image 目录里同前缀文件的最大序号，避免覆盖孤儿文件。
+    """
+    next_sequence = max(index.max_sequence, _max_image_file_sequence(file_prefix)) + 1
+    if requested_sequence != next_sequence:
+        return next_sequence, f'⚠️ agent 传入序号 {requested_sequence} 与当前下一安全序号不一致，已自动改为 {next_sequence}'
+    return next_sequence, ''
+
+
+# === 站点 hint 注册表：让逐项下载工具保持纯通用，站点差异通过注册下沉 ===
+
+# 每项: {'hosts': tuple[str, ...], 'manifest': callable|None, 'invalid_collection': callable|None}
+_SITE_DOWNLOAD_HINTS: list[dict] = []
+
+
+def register_download_site_hint(
+    hosts: list[str] | tuple[str, ...],
+    *,
+    manifest_from_page_url=None,
+    is_invalid_collection_url=None,
+) -> None:
+    """
+    注册某站点的下载 hint：从详情页 URL 推导 IIIF manifest、以及非法 collection URL 判定。
+    download_image_from_url 通过通用分发调用这些 hint，新增站点只需在此注册，无需改下载工具本身。
+    """
+    normalized_hosts = tuple(h.strip().lower() for h in hosts if h and h.strip())
+    _SITE_DOWNLOAD_HINTS.append({
+        'hosts': normalized_hosts,
+        'manifest': manifest_from_page_url,
+        'invalid_collection': is_invalid_collection_url,
+    })
+
+
+def _matching_site_hints(url: str):
+    host = (urlparse(_clean_url_text(url)).hostname or '').lower()
+    if not host:
+        return
+    for hint in _SITE_DOWNLOAD_HINTS:
+        if any(host == h or host.endswith('.' + h) for h in hint['hosts']):
+            yield hint
+
+
+def _site_manifest_url_from_page_url(page_url: str) -> str:
+    """通用分发：若有站点 hint 能从详情页 URL 推导出 IIIF manifest，返回之；否则空串。"""
+    for hint in _matching_site_hints(page_url):
+        fn = hint.get('manifest')
+        if fn is None:
+            continue
+        try:
+            result = fn(page_url)
+        except Exception:
+            continue
+        if result:
+            return result
+    return ''
+
+
+def _site_invalid_collection_url(url: str) -> bool:
+    """通用分发：若有站点 hint 判定该 URL 为非法 collection/列表页，返回 True。"""
+    for hint in _matching_site_hints(url):
+        fn = hint.get('invalid_collection')
+        if fn is None:
+            continue
+        try:
+            if fn(url):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+# 注册 idp.bl.uk 的下载 hint（复用现有 IDP helper，行为保持不变）。
+register_download_site_hint(
+    ['idp.bl.uk', 'data.idp.bl.uk'],
+    manifest_from_page_url=_idp_manifest_url_from_page_url,
+    is_invalid_collection_url=_is_invalid_idp_collection_url,
+)
+
+
 def _append_image_record(record_file: Path, record: dict) -> None:
     record_file.parent.mkdir(parents=True, exist_ok=True)
     with open(record_file, 'a', encoding='utf-8') as file:

@@ -98,6 +98,13 @@ class RunnerGUI:
         self.var_chrome_user_data = tk.StringVar(value=os.environ.get('IDP_CHROME_USER_DATA_DIR', ''))
         self.var_chrome_profile = tk.StringVar(value=os.environ.get('IDP_CHROME_PROFILE_DIRECTORY', 'Default'))
         self.var_proxy_server = tk.StringVar(value=os.environ.get('IDP_PROXY_SERVER', ''))
+        # 方案C：Scrapling 自动取 cf_clearance 通行证（相对探测同级 Scrapling/.venv，避免硬编码绝对路径）
+        _guess_scrapling = BASE_DIR.parent.parent / 'Scrapling' / '.venv' / 'Scripts' / 'python.exe'
+        self.var_scrapling_py = tk.StringVar(
+            value=os.environ.get('IDP_SCRAPLING_PYTHON', '') or (str(_guess_scrapling) if _guess_scrapling.exists() else '')
+        )
+        self.var_cf_url = tk.StringVar(value=os.environ.get('IDP_CF_URL', ''))
+        self.var_storage_state = tk.StringVar(value=os.environ.get('IDP_STORAGE_STATE', ''))
 
         def row(r: int, label: str, var: tk.StringVar, *, show: str | None = None, col: int = 0, width: int = 24):
             ttk.Label(frm, text=label).grid(row=r, column=col, sticky='w', padx=6, pady=4)
@@ -129,6 +136,9 @@ class RunnerGUI:
         row(9, 'Chrome用户数据目录(可选)', self.var_chrome_user_data, col=0, width=42)
         row(10, 'Chrome profile名', self.var_chrome_profile, col=0, width=42)
         row(11, '代理服务器(可选)', self.var_proxy_server, col=0, width=42)
+        row(12, 'Scrapling解释器(方案C,可选)', self.var_scrapling_py, col=0, width=42)
+        row(13, '取证URL(可选,默认目标站)', self.var_cf_url, col=0, width=42)
+        row(14, 'cookie文件路径(可选)', self.var_storage_state, col=0, width=42)
 
         btns = ttk.Frame(self.root)
         btns.pack(fill='x', padx=10, pady=(0, 4))
@@ -239,6 +249,9 @@ class RunnerGUI:
             'chrome_user_data': self.var_chrome_user_data.get().strip(),
             'chrome_profile': self.var_chrome_profile.get().strip() or 'Default',
             'proxy_server': self.var_proxy_server.get().strip(),
+            'scrapling_py': self.var_scrapling_py.get().strip(),
+            'cf_url': self.var_cf_url.get().strip(),
+            'storage_state': self.var_storage_state.get().strip(),
         }
 
     def on_start(self) -> None:
@@ -282,6 +295,13 @@ class RunnerGUI:
             env['IDP_CHROME_PROFILE_DIRECTORY'] = cfg['chrome_profile']
         if cfg['proxy_server']:
             env['IDP_PROXY_SERVER'] = cfg['proxy_server']
+        # 方案C：自动取/刷新 cf_clearance 通行证（auto_run + fetch_cf_cookie.py 读取这些环境变量）。
+        if cfg['scrapling_py']:
+            env['IDP_SCRAPLING_PYTHON'] = cfg['scrapling_py']
+        if cfg['cf_url']:
+            env['IDP_CF_URL'] = cfg['cf_url']
+        if cfg['storage_state']:
+            env['IDP_STORAGE_STATE'] = cfg['storage_state']
 
         try:
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0

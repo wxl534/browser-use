@@ -81,6 +81,19 @@ def build_browser(image_dir) -> Browser:
     """
     proxy = _build_proxy_from_env()
 
+    # 方案C：注入 Scrapling 取得的 cf_clearance 等 cookie（storage_state），
+    # 让浏览器揣着"已通过人机验证的通行证"进站，跳过 Cloudflare Turnstile。
+    # 由 fetch_cf_cookie.py 产出；未设置或文件不存在则忽略（零破坏回退）。
+    storage_state = None
+    storage_state_path = os.environ.get('IDP_STORAGE_STATE', '').strip()
+    if storage_state_path:
+        if Path(storage_state_path).exists():
+            storage_state = storage_state_path
+            print(f"🍪 注入 cf_clearance 通行证（storage_state）：{storage_state_path}")
+            print("     ⚠️  cf_clearance 与签发它的出口 IP 绑定，请确保本次出口 IP 与取证时一致。")
+        else:
+            print(f"⚠️  IDP_STORAGE_STATE 指向的文件不存在：{storage_state_path}，本次不注入 cookie")
+
     executable_path = os.environ.get('IDP_CHROME_EXECUTABLE', '').strip()
     user_data_dir = os.environ.get('IDP_CHROME_USER_DATA_DIR', '').strip()
 
@@ -108,6 +121,7 @@ def build_browser(image_dir) -> Browser:
             enable_default_extensions=False,
             downloads_path=str(image_dir),
             proxy=proxy,
+            storage_state=storage_state,
         )
 
     # 回退：内置 Chromium + 项目内 browser_profile（与原行为一致）
@@ -121,6 +135,7 @@ def build_browser(image_dir) -> Browser:
         enable_default_extensions=False,
         downloads_path=str(image_dir),  # 下载文件保存到 image 目录
         proxy=proxy,
+        storage_state=storage_state,
     )
 
 

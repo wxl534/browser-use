@@ -578,6 +578,87 @@ def run_main_subprocess(
     return int(returncode)
 
 
+# === 方案C：自动刷新 Cloudflare 通行证（cf_clearance）===
+# 由 fetch_cf_cookie.py（在隔离的 Scrapling 解释器里）取证，产出 storage_state JSON，
+# 通过 IDP_STORAGE_STATE 透传给 main.py 子进程注入。整套功能完全可选：未配置
+# IDP_SCRAPLING_PYTHON 时静默关闭，不影响原有行为。
+CF_REFRESH_MARGIN_SECONDS = 180  # cf_clearance 距过期不足该秒数即视为需要刷新
+
+
+def _storage_state_path() -> Path:
+    """storage_state 输出/读取路径（默认脚本目录下 cf_storage.json，相对脚本位置）。"""
+    configured = os.environ.get('IDP_STORAGE_STATE', '').strip()
+    return Path(configured) if configured else (BASE_DIR / 'cf_storage.json')
+
+
+def _scrapling_python() -> str | None:
+    """返回可用于运行 fetch_cf_cookie.py 的 Scrapling 解释器路径；未配置/不存在则 None。"""
+    configured = os.environ.get('IDP_SCRAPLING_PYTHON', '').strip()
+    if not configured:
+        return None
+    if not Path(configured).exists():
+        print(f"⚠️ IDP_SCRAPLING_PYTHON 指向的解释器不存在：{configured}，自动刷新 cookie 已关闭", flush=True)
+        return None
+    return configured
+
+
+def _cf_cookie_fresh(path: Path, margin: int = CF_REFRESH_MARGIN_SECONDS) -> bool:
+    """判断现有 storage_state 是否仍持有未临近过期的 cf_clearance。"""
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return False
+    meta = data.get('_meta', {}) if isinstance(data, dict) else {}
+    if not meta.get('cf_clearance_present'):
+        return False
+    expires = meta.get('cf_clearance_expires')
+    if not isinstance(expires, (int, float)) or expires <= 0:
+        # 无过期信息时保守地认为新鲜（避免每轮都刷），靠 force 刷新兜底。
+        return True
+    return time.time() < (expires - margin)
+
+
+def ensure_cf_cookie(stop_event: threading.Event, *, force: bool = False, reason: str = '') -> None:
+    """确保 storage_state 持有有效 cf_clearance；过期/缺失或 force 时调用取证脚本刷新。
+
+    取证脚本继承当前进程的环境变量（含 IDP_PROXY_* / IDP_CF_URL / IDP_STORAGE_STATE），
+    因此取证与 browser-use 共用同一代理 / 出口 IP —— 这是 cf_clearance 生效的前提。
+    """
+    python = _scrapling_python()
+    if python is None:
+        return  # 功能未启用，静默跳过
+    if stop_event.is_set():
+        return
+    path = _storage_state_path()
+    if not force and _cf_cookie_fresh(path):
+        return
+
+    label = reason or ('强制刷新' if force else '刷新')
+    print(f"🍪 [{label}] 调用 Scrapling 取证刷新 cf_clearance …", flush=True)
+    env = {**os.environ.copy(), 'PYTHONIOENCODING': 'utf-8', 'IDP_STORAGE_STATE': str(path)}
+    try:
+        proc = subprocess.run(
+            [python, str(BASE_DIR / 'fetch_cf_cookie.py')],
+            cwd=str(BASE_DIR),
+            env=env,
+            timeout=int(os.environ.get('IDP_CF_FETCH_TIMEOUT', '300')),
+        )
+    except subprocess.TimeoutExpired:
+        print("⚠️ cf_clearance 取证超时，本轮沿用现有 cookie（若有）。", flush=True)
+        return
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️ cf_clearance 取证调用失败：{type(exc).__name__}: {exc}", flush=True)
+        return
+    if proc.returncode == 0:
+        print(f"✅ cf_clearance 已刷新 → {path}", flush=True)
+    elif proc.returncode == 2:
+        print("⚠️ 取证完成但未获 cf_clearance（可能本就放行，或 IP 信誉被挡需换住宅代理）。", flush=True)
+    else:
+        print(f"⚠️ 取证脚本返回码 {proc.returncode}，本轮沿用现有 cookie（若有）。", flush=True)
+
+
 def auto_run_until_target(
     *,
     cache_dir: Path,
@@ -605,6 +686,12 @@ def auto_run_until_target(
     start_quit_listener(stop_event)
     no_progress_rounds = 0
     history: list[dict] = []
+
+    # 方案C：若启用了 Scrapling 取证（设了 IDP_SCRAPLING_PYTHON），让 main.py 子进程
+    # 读到 storage_state 路径，并在开跑前预取一次 cf_clearance 通行证。
+    if _scrapling_python() is not None:
+        os.environ['IDP_STORAGE_STATE'] = str(_storage_state_path())
+        ensure_cf_cookie(stop_event, reason='启动前预取')
 
     for round_number in range(1, max_rounds + 1):
         if stop_event.is_set():
@@ -635,6 +722,9 @@ def auto_run_until_target(
             print(f"📌 页面队列选择续跑点: page={active_page['page']}, index={active_page['next_index']}", flush=True)
         else:
             print("🆕 本轮选择从头开始，不读取或同步续跑点", flush=True)
+
+        # 方案C：跑前确保通行证新鲜（过期/缺失才会真正去刷，否则秒返回）。
+        ensure_cf_cookie(stop_event, reason=f'第{round_number}轮跑前检查')
 
         returncode = run_main_subprocess(
             cache_dir, round_number, stop_event, resume_run=resume_this_round, round_timeout=round_timeout
@@ -691,6 +781,8 @@ def auto_run_until_target(
                 f"让限流窗口恢复后再续跑…（连续无进展 {no_progress_rounds}/{max_no_progress_rounds}）",
                 flush=True,
             )
+            # 方案C：无新增多半是 cf_clearance 失效或本会话被挑战，强制重新取证一张通行证。
+            ensure_cf_cookie(stop_event, force=True, reason='疑似被限流，强制刷新通行证')
             _interruptible_sleep(cooldown, stop_event)
         elif sleep_seconds > 0:
             _interruptible_sleep(sleep_seconds, stop_event)
@@ -776,6 +868,25 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get('IDP_PROXY_SERVER', ''),
         help='可选代理服务器，如 http://user:pass@host:port（攻击 Cloudflare 的 IP 信誉层）',
     )
+    # === 方案C：用 Scrapling 自动取 cf_clearance 通行证并注入 ===
+    parser.add_argument(
+        '--scrapling-python',
+        type=str,
+        default=os.environ.get('IDP_SCRAPLING_PYTHON', ''),
+        help='安装了 scrapling[fetchers] 的解释器路径；设置后启用自动取证/刷新 cf_clearance（不设则关闭）',
+    )
+    parser.add_argument(
+        '--cf-url',
+        type=str,
+        default=os.environ.get('IDP_CF_URL', ''),
+        help='取 cf_clearance 的目标 URL（默认目标站首页，由 fetch_cf_cookie.py 兜底）',
+    )
+    parser.add_argument(
+        '--storage-state',
+        type=str,
+        default=os.environ.get('IDP_STORAGE_STATE', ''),
+        help='storage_state JSON 路径（取证输出 + main.py 注入；默认脚本目录下 cf_storage.json）',
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--resume', action='store_true', help='第一轮从上次断点续跑')
     mode.add_argument('--new-run', action='store_true', help='第一轮归档旧 ImagesCache 并从头开始')
@@ -797,6 +908,13 @@ def main() -> int:
         os.environ['IDP_CHROME_PROFILE_DIRECTORY'] = args.chrome_profile_directory
     if args.proxy_server:
         os.environ['IDP_PROXY_SERVER'] = args.proxy_server
+    # 方案C：透传取证配置（auto_run 内部及 fetch_cf_cookie.py 都从这些环境变量读取）。
+    if args.scrapling_python:
+        os.environ['IDP_SCRAPLING_PYTHON'] = args.scrapling_python
+    if args.cf_url:
+        os.environ['IDP_CF_URL'] = args.cf_url
+    if args.storage_state:
+        os.environ['IDP_STORAGE_STATE'] = args.storage_state
     resume_first_round = configure_before_run(
         args.cache_dir,
         resume_choice=resume_choice,

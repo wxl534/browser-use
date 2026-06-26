@@ -103,3 +103,6 @@ history/
 browser_profile/
 browseruse_agent_data/
 extracted_pages/
+
+# 方案C：Cloudflare 通行证 cookie（含凭证、IP绑定、临时，勿提交）
+cf_storage.json

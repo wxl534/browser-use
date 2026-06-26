@@ -17,9 +17,9 @@ from tools_registry import (
     _load_generic_image_strategy,
     _looks_like_iiif_manifest_url,
     _normalize_border_ratio,
-    _numbered_file_stem,
     _ordered_generic_image_methods,
     _prefix_from_filename,
+    _provisional_image_stem,
     _record_generic_image_method_failure,
     _record_generic_image_method_success,
     _record_saved_image_fast,
@@ -33,6 +33,7 @@ from tools_registry import (
     _sha256_file,
     _site_invalid_collection_url,
     _site_manifest_url_from_page_url,
+    _source_hash,
     tools,
 )
 
@@ -118,13 +119,18 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
 
         record_index, existing_image_hashes, index_cache = _get_cached_download_index(params.record_filename)
 
+        source_hash = _source_hash(page_url, image_url, 0)
+
         existing_record = record_index.records_by_image_url.get(image_url) if image_url else None
+        if existing_record is None and source_hash:
+            existing_record = record_index.records_by_source_hash.get(source_hash)
         if existing_record:
             msg = (
-                f'✅ 图片 URL 已有下载记录，视为当前图片已处理，继续下一条即可\n'
+                f'✅ 图片来源已有下载记录，视为当前图片已处理，继续下一条即可\n'
                 f'- 已有序号: {existing_record.get("sequence")}\n'
                 f'- 已有文件: {existing_record.get("file_name", "")}\n'
                 f'- 图片 URL: {image_url}\n'
+                f'- source_hash: {source_hash}\n'
                 f'- 页面 URL: {existing_record.get("page_url", "") or page_url or "未提供"}\n'
                 f'{manifest_note}'
             )
@@ -133,15 +139,17 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
             return ActionResult(
                 extracted_content=msg,
                 include_in_memory=True,
-                long_term_memory=f'图片 URL 已记录，跳过重复下载: {existing_record.get("file_name", "")}',
+                long_term_memory=f'图片来源已记录，跳过重复下载: {existing_record.get("file_name", "")}',
                 attachments=attachments,
             )
 
         file_prefix = _prefix_from_filename(params.file_name, 'temple')
         sequence, sequence_note = _safe_requested_image_sequence_from_index(params.sequence, record_index, file_prefix)
-        file_name = _numbered_file_stem(params.file_name, sequence, file_prefix)
         title = _renumber_title_if_needed(params.title, sequence)
         border_ratio = _normalize_border_ratio(params.border_ratio)
+        # 临时落地文件名 = 图片与其信息的共有 hash（source_hash），下载瞬间即唯一绑定来源，
+        # 命名前不会与别的 item 混淆；落地后立刻据此 hash 对应的信息重命名为最终名。
+        file_name = _provisional_image_stem(source_hash)
 
         strategy_before = _load_generic_image_strategy()
         methods = _ordered_generic_image_methods(strategy_before, params.prefer_browser_fetch, params.allow_clean_screenshot)

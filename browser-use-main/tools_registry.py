@@ -1278,21 +1278,40 @@ def _source_item_id_from_urls(page_url: str, image_url: str = '') -> str:
     return ''
 
 
-def _final_image_filename(title: str, sequence: int, file_hash: str, suffix: str) -> str:
+def _titled_image_stem(title: str, sequence: int) -> str:
+    """
+    生成"序号_标题"形式的可读文件名词干（不含 hash 后缀、不含扩展名）。
+
+    既用于下载落地时的临时名（落地即可读：以图片自己的 title 命名），
+    也用于最终名的前缀部分；最终名再在其后追加信息 hash。两处共用同一词干，
+    保证临时名与最终名的可读前缀完全一致。
+    """
     normalized_title = _normalize_title(title, fallback=f'image_{sequence:03d}')
     normalized_title = re.sub(r'^(?:temple|image)_\d{1,6}_?', '', normalized_title, flags=re.IGNORECASE)
     if not re.search(r'_\d{3,}(?:_|$)', normalized_title):
         normalized_title = f'{sequence:03d}_{normalized_title}'
     safe_stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', normalized_title)
     safe_stem = re.sub(r'_+', '_', safe_stem).strip('._ ')[:180] or f'image_{sequence:03d}'
-    short_hash = (file_hash or '')[:8] or 'nohash'
+    return safe_stem
+
+
+def _final_image_filename(title: str, sequence: int, embed_hash: str, suffix: str) -> str:
+    """
+    最终文件名 = 序号_标题_信息hash8位.ext。
+
+    ``embed_hash`` 是要嵌入文件名的指纹，调用方传入该图片"对应信息"的 source_hash
+    （sha256(page_url|image_url|index)），使文件名自带信息绑定指纹，海量数据下也能
+    把图片与其信息一一对应、不串位。
+    """
+    safe_stem = _titled_image_stem(title, sequence)
+    short_hash = (embed_hash or '')[:8] or 'nohash'
     if not safe_stem.endswith(f'_{short_hash}'):
         safe_stem = f'{safe_stem}_{short_hash}'
     return f'{safe_stem}{normalize_image_ext(suffix, fallback=".jpg")}'
 
 
-def _rename_image_to_final_name(image_path: Path, title: str, sequence: int, file_hash: str) -> Path:
-    final_name = _final_image_filename(title, sequence, file_hash, image_path.suffix)
+def _rename_image_to_final_name(image_path: Path, title: str, sequence: int, embed_hash: str) -> Path:
+    final_name = _final_image_filename(title, sequence, embed_hash, image_path.suffix)
     final_path = image_path.with_name(final_name)
     if image_path.resolve() == final_path.resolve():
         return image_path.resolve()
@@ -1663,7 +1682,10 @@ async def _record_saved_image_fast(
                 long_term_memory=f'来源已记录，跳过重复记录: {existing_record.get("file_name", "")}',
             )
 
-        image_path = _rename_image_to_final_name(image_path, normalized_title, sequence, file_hash)
+        # 最终名后缀嵌入信息 hash（source_hash），让文件名自带"图片↔信息"绑定指纹；
+        # 完整性仍用内容 sha256(file_hash) 校验（与文件名无关）。
+        embed_hash = source_hash or file_hash
+        image_path = _rename_image_to_final_name(image_path, normalized_title, sequence, embed_hash)
         final_file_hash = _sha256_file(image_path)
         if final_file_hash != file_hash:
             raise RuntimeError(f'最终命名后图片 hash 变化: before={file_hash}, after={final_file_hash}')

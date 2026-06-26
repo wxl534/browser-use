@@ -19,7 +19,6 @@ from tools_registry import (
     _normalize_border_ratio,
     _ordered_generic_image_methods,
     _prefix_from_filename,
-    _provisional_image_stem,
     _record_generic_image_method_failure,
     _record_generic_image_method_success,
     _record_saved_image_fast,
@@ -34,6 +33,7 @@ from tools_registry import (
     _site_invalid_collection_url,
     _site_manifest_url_from_page_url,
     _source_hash,
+    _titled_image_stem,
     tools,
 )
 
@@ -147,9 +147,9 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
         sequence, sequence_note = _safe_requested_image_sequence_from_index(params.sequence, record_index, file_prefix)
         title = _renumber_title_if_needed(params.title, sequence)
         border_ratio = _normalize_border_ratio(params.border_ratio)
-        # 临时落地文件名 = 图片与其信息的共有 hash（source_hash），下载瞬间即唯一绑定来源，
-        # 命名前不会与别的 item 混淆；落地后立刻据此 hash 对应的信息重命名为最终名。
-        file_name = _provisional_image_stem(source_hash)
+        # 临时落地名 = 图片自己的「序号_标题」（信息提取阶段已识别 title），落地瞬间即可读；
+        # 落地后只在该词干后追加信息 hash（source_hash），定为最终名，保证图片与信息严格对应。
+        file_name = _titled_image_stem(title, sequence)
 
         strategy_before = _load_generic_image_strategy()
         methods = _ordered_generic_image_methods(strategy_before, params.prefer_browser_fetch, params.allow_clean_screenshot)

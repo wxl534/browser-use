@@ -129,7 +129,8 @@ async def record_downloaded_image(params: RecordDownloadedImageParams):
                 long_term_memory=f'image 目录已有相同图片，跳过重复记录: {existing_image_path.name}',
             )
 
-        image_path = _rename_image_to_final_name(image_path, normalized_title, sequence, file_hash)
+        embed_hash = source_hash or file_hash
+        image_path = _rename_image_to_final_name(image_path, normalized_title, sequence, embed_hash)
         final_file_hash = _sha256_file(image_path)
         if final_file_hash != file_hash:
             raise RuntimeError(f'最终命名后图片 hash 变化: before={file_hash}, after={final_file_hash}')

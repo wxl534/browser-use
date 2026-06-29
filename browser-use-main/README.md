@@ -1,34 +1,43 @@
-# Browser-Use 图片自动下载工具
+# IDP 图库通用图片爬虫
 
-基于 [browser-use](https://github.com/browser-use/browser-use) 库，通过 LLM 驱动浏览器 Agent 自动完成：网页图片搜索、下载、信息提取、文件重命名的全流程自动化。
+基于 [browser-use](https://github.com/browser-use/browser-use) 库，以 LLM 驱动的浏览器 Agent 做**确定性批量爬取**：搜索关键词 → 批量提取藏品 → 解析 IIIF manifest → 并发下载 → 去重落库，循环运行直到达成目标张数。
+
+首个跑通站点为 [idp.bl.uk](https://idp.bl.uk/)（International Dunhuang Project）；架构面向"结构相似的 IIIF 图库站点"通用化（详见 [`WORKFLOW.md`](./WORKFLOW.md)）。
+
+> 设计核心：**LLM 每页只决策一次「调批量工具」，其余全部确定性代码**，配合反 Cloudflare 通行证实现长时间无人值守稳定运行。
 
 ## 功能概览
 
-- 🤖 **LLM 驱动**：Agent 自动理解任务、操作浏览器、执行下载
-- 📥 **自动下载**：识别并点击下载按钮，图片保存到 `image/` 目录
-- 📄 **信息提取**：自定义工具 `extract_page_to_markdown`，基于 `Information.md` 中的模式从网页源码提取内容
-- 🏷️ **自动重命名**：Agent 完成后自动调用脚本，根据 `title.txt` 将图片重命名为有意义的标题
-- 🛑 **优雅退出**：运行过程中输入 `quit` 即可安全停止
+- 🧭 **监工 / Worker 双层架构**：`runner.py` 多轮调度，每轮 fork 全新 `worker.py` 子进程，隔离崩溃与内存泄漏，跑到目标为止
+- 📦 **整页批量下载**：`download_current_idp_search_page_images` 一次处理整页几十张图，零 LLM 逐项点击
+- 🧩 **IIIF 通用适配**：`adapters/iiif.py` 解析 manifest 抽图打分，配置驱动接入新站
+- 🛡️ **反 Cloudflare**：`scripts/fetch_cf_cookie.py` 取 `cf_clearance` 通行证并注入浏览器
+- ♻️ **断点续跑**：基于 `image_record.jsonl` / `idp_progress.json` 自愈续跑、不重复下载
+- 🔁 **单次/持续开关**：`runner.py` 的 `RUN_ONCE`（默认 0 持续跑直到达标，改 1 只跑一轮）
 
 ## 项目结构
 
 ```
 browser-use-main/
-├── main.py                # 主程序入口
-├── tools_registry.py      # 自定义工具注册（extract_page_to_markdown）
-├── move_images.py         # Agent 运行前清理 image/ 目录
-├── rename_images.py       # Agent 运行后根据 title.txt 重命名图片
-├── task.md                # 任务描述文件（Agent 读取此文件作为指令）
-├── task1.md               # 备选任务模板
-├── Information.md         # HTML 提取模式配置（自定义工具使用）
-├── test_main.py           # 测试脚本（不调用 LLM）
-├── .env.example           # 环境变量模板
-├── pyproject.toml         # 项目依赖配置
-├── browser_use/           # browser-use 库源码（本地修改版）
-├── image/                 # 下载的图片（自动创建）
-├── history/               # 历史图片存档（自动创建）
-├── browseruse_agent_data/ # Agent 运行数据（title.txt 等）
-└── browser_profile/       # 浏览器用户数据（自动创建）
+├── runner.py               # 监工入口：多轮调度 + 刷新 cf_clearance（主用，含 RUN_ONCE 开关）
+├── worker.py               # 单轮入口：读 task.md → 建浏览器 → 跑 Agent
+├── task_config.json        # 唯一手改配置（keyword/target_count/site_url/allowed_hosts/mode）
+├── task_template.md        # task.md 渲染模板
+├── task.md                 # 自动生成的 Agent 指令书（勿手改）
+├── resume_context_template.md  # 断点续跑上下文模板
+├── core/                   # 核心：tools_registry / batch_download / concurrent_download
+│                           #       idp_page_progress / task_parse / cache_layout
+├── adapters/               # 站点差异层：base / iiif / idp / generic_config / registry / profile_site
+├── sites/                  # 站点插件（注入下载 hint）
+├── tool_actions/           # 注册给 Agent 的工具（批量下载 / 翻页 / 校验 / 过人机验证）
+├── scripts/                # 辅助脚本：render_task / fetch_cf_cookie / move_images / rename_images / run_gui
+├── legacy/                 # 历史遗留工具（逐 item 兜底，默认不注册）
+├── webapp/                 # 爬虫 Web 控制台（backend + frontend）
+├── tests/test_worker.py    # 测试脚本（不调用 LLM）
+├── docs/                   # 项目文档
+├── docker/                 # Docker 相关
+├── browser_use/            # browser-use 库源码（本地修改版）
+└── .env.example            # 环境变量模板
 ```
 
 ## 从零开始配置
@@ -36,23 +45,20 @@ browser-use-main/
 ### 前提条件
 
 - **Python** >= 3.11（推荐 3.12+）
-- **Chrome / Chromium** 浏览器（已安装即可，程序自动检测）
-- **Git**（用于克隆项目）
+- **Chrome / Chromium** 浏览器（程序自动检测）
+- **Git**
 
-### 第一步：克隆项目
+### 第一步：克隆并进入项目
 
 ```bash
-git clone https://github.com/你的用户名/browser-use.git
-cd browser-use/browser-use-main
+git clone <仓库地址>
+cd browser-use-main
 ```
 
-### 第二步：创建虚拟环境
+### 第二步：创建并激活虚拟环境
 
 ```bash
-# 创建虚拟环境
 python -m venv .venv
-
-# 激活虚拟环境
 # Windows:
 .venv\Scripts\activate
 # macOS/Linux:
@@ -62,174 +68,114 @@ source .venv/bin/activate
 ### 第三步：安装依赖
 
 ```bash
-# 以开发模式安装（包含所有依赖）
 pip install -e .
-
-# 如果安装较慢，可使用国内镜像
+# 国内镜像加速（可选）
 pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 ### 第四步：配置环境变量
 
 ```bash
-# 复制模板
 cp .env.example .env
 ```
 
-编辑 `.env` 文件，配置日志级别等选项（默认配置即可运行）。
+`.env` 中关键项（LLM 凭证，由 `worker.py` 读取）：
 
-### 第五步：配置 LLM(无需修改)
-
-在 `main.py` 中配置你的大模型。默认使用 OpenAI 兼容接口：
-
-```python
-# main.py 中修改以下内容
-api_key = '你的API密钥'
-base_url = 'https://你的API地址/v1'
-
-llm = ChatOpenAI(
-    model='模型名称',
-    api_key=api_key,
-    base_url=base_url,
-    temperature=0.0
-)
+```bash
+OPENAI_API_KEY=你的key
+OPENAI_BASE_URL=https://你的兼容接口/v1   # 默认 https://openapi.seu.edu.cn/v1
 ```
 
-**支持的 LLM 配置方式：**
+`worker.py` 默认用 `ChatOpenAI(model='qwen3.5-397b-a17b', ...)`，可在 `worker.py` 内改模型名。任何 OpenAI 兼容接口（DeepSeek / 通义千问 / OpenAI 等）均可。
 
-| 方式 | 说明 |
-|------|------|
-| `ChatOpenAI(api_key=..., base_url=...)` | 任何 OpenAI 兼容 API（推荐） |
-| `ChatBrowserUse()` | browser-use 官方 LLM（需付费订阅） |
-| 环境变量 `OPENAI_API_KEY` | 直接使用 OpenAI 官方 |
+### 第五步：配置任务
 
-**常见 LLM 服务示例：**
+只改 **`task_config.json`**，然后重新渲染生成 `task.md`：
 
-```python
-# DeepSeek
-llm = ChatOpenAI(model='deepseek-chat', api_key='你的key', base_url='https://api.deepseek.com/v1')
-
-# 通义千问（阿里云）
-llm = ChatOpenAI(model='qwen-plus', api_key='你的key', base_url='https://dashscope.aliyuncs.com/compatible-mode/v1')
-
-# OpenAI
-llm = ChatOpenAI(model='gpt-4o', api_key='你的key')
+```jsonc
+{
+  "keyword": "china buddhist",   // 搜索关键词
+  "target_count": 5000,          // 目标图片数
+  "site_url": "https://idp.bl.uk/",
+  "allowed_hosts": ["idp.bl.uk", "data.idp.bl.uk", "bl.uk"],
+  "mode": "idp_batch"
+}
 ```
 
-### 第六步：配置任务（无需修改）
-
-编辑 `task.md` 文件，描述你希望 Agent 执行的任务。项目已包含默认任务模板。
-
-关键配置项：
-- **`n = 3`**：修改要下载的图片数量
-- **搜索关键词**：修改 `'buddhist temple'` 为你想搜索的内容
-- **目标网站**：修改 URL 为目标网站
-
-### 第七步：配置 Information.md（可选）（无需修改）
-
-如果需要使用 `extract_page_to_markdown` 工具提取网页内容，编辑 `Information.md`：
-
-````markdown
-```html
-要提取内容的起始HTML标签或JS变量
-要提取内容的结束HTML标签或分号
+```bash
+python scripts/render_task.py --mode idp_batch
 ```
-````
 
-工具会在网页源码中查找匹配首尾行之间的内容并保存。
+> ⚠️ `task.md` 是自动生成的，**请勿手改**；改需求一律改 `task_config.json` 后重新渲染。
 
 ## 运行项目
 
 ```bash
-# 确保虚拟环境已激活
-# Windows:
-.venv\Scripts\activate
+# Windows（推荐显式指定解释器并设编码）
+$env:PYTHONIOENCODING='utf-8'; .\.venv\Scripts\python.exe runner.py
 
-# 运行主程序
-python main.py
+# macOS/Linux
+python runner.py
 ```
 
 **运行流程：**
-1. 读取 `task.md` 任务描述
-2. 运行 `move_images.py` 清理 `image/` 目录（旧文件移入 `history/`）
-3. 启动浏览器，创建 Agent
-4. Agent 自动执行任务（搜索、下载、提取信息）
-5. 运行 `rename_images.py` 根据 `title.txt` 重命名图片
-6. 输出统计结果
+1. `runner.py` 读取目标，预取/刷新 `cf_clearance` 通行证
+2. 每轮 fork 一个全新 `worker.py` 子进程
+3. `worker.py` 读 `task.md`、建浏览器（注入通行证）、跑 Agent
+4. Agent 每页调一次批量工具，整页下载并去重落库
+5. 统计新增；未达标则带新通行证继续下一轮，直到 `target_count` 达成
 
-**运行中操作：**
-- 输入 `quit` + 回车 → 安全停止 Agent
-- `Ctrl+C` → 强制中断
+**单次运行**：把 `runner.py` 顶部的 `RUN_ONCE` 改为 `1`，则只跑一轮后停止（无论是否达标）。默认 `0` 持续重跑直到达标。
 
 ## 运行测试
 
 ```bash
 # 不调用 LLM，验证代码功能
-python test_main.py
+python -m tests.test_worker
 ```
 
-测试覆盖：脚本执行、路径配置、工具注册、退出机制、文件验证、重命名逻辑等 39 个断言。
+当前基线：**101/101 通过**（脚本执行、路径配置、工具注册、续跑上下文、批量下载、重命名等）。
 
-## 自定义工具说明
+## 注册的工具
 
-### extract_page_to_markdown
+| 工具 | 用途 | 调用频率 |
+|---|---|---|
+| `download_current_idp_search_page_images` | **主力**：整页批量下载，零 LLM | 每页 1 次 |
+| `navigate_idp_search_page` | 翻页到指定搜索页 | 按需 |
+| `finish_download_task` | 收尾 | 按需 |
+| `validate_download_completion` | 校验完成度 | 按需 |
+| `wait_for_human_verification` | 处理人机验证 | 按需 |
 
-从当前网页源码中提取符合 `Information.md` 模式的内容。
+> 逐个 item 兜底工具（`download_image_from_url` / `next_search_item` / `extract_page_to_markdown` 等）实测效果差、从未真正使用，已迁入 `legacy/` 且默认不注册；如需启用设环境变量 `BROWSER_USE_ENABLE_LEGACY_TOOLS=1`。
 
-**参数：**
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `output_filename` | `page_content.md` | 输出文件名 |
-| `output_dir` | `image/` | 输出目录 |
-| `format_type` | `markdown` | 格式：markdown / json / text |
-| `information_file_path` | `Information.md` | 模式配置文件 |
+## 关键状态文件（每轮 ImagesCache 内）
 
-**工作原理：**
-1. 读取 `Information.md` 中的 HTML 代码块首尾行
-2. 在网页源码中用 JavaScript 正则匹配
-3. 将匹配内容保存为文件
-
-## 各文件说明
-
-| 文件 | 功能 |
-|------|------|
-| `main.py` | 主程序：读取任务、管理浏览器生命周期、运行 Agent、验证结果 |
-| `tools_registry.py` | 注册自定义工具，包含路径安全验证 |
-| `move_images.py` | 运行前清理：将 `image/` 中的文件移入 `history/` 的时间戳子文件夹 |
-| `rename_images.py` | 运行后处理：读取 `title.txt`，将 `image_1.tiff` 等重命名为标题 |
-| `task.md` | Agent 的任务指令，支持自定义目标网站、下载数量等 |
-| `Information.md` | 自定义工具的 HTML 提取模式配置 |
-| `test_main.py` | 功能测试脚本（不需要 LLM） |
+| 文件 | 作用 |
+|---|---|
+| `image_record.jsonl` | 每图一条记录，去重与续跑的事实来源 |
+| `idp_progress.json` | next_page / next_index，续跑可信源 |
+| `idp_page_progress.json` | 每页统计 |
+| `temple_photo_info.md` | 由记录重写的可读信息表 |
+| `cf_storage.json` | Cloudflare 通行证（已被 .gitignore 忽略，勿提交） |
 
 ## 常见问题
 
-### Q: 浏览器没有自动打开？
-确认已安装 Chrome 或 Chromium。程序会自动检测系统中的浏览器。
+**Q: 为什么不是 `python main.py`？**
+旧版单文件入口已重构为监工/Worker 双层：日常只跑 `python runner.py`，它会自动多轮调度 `worker.py`。
 
-### Q: 下载的文件在哪里？
-所有下载的图片保存在项目目录下的 `image/` 文件夹。
+**Q: 怎么改下载数量 / 搜索词 / 站点？**
+改 `task_config.json` 后跑 `python scripts/render_task.py` 重新渲染，切勿直接编辑 `task.md`。
 
-### Q: 如何修改下载数量？
-编辑 `task.md` 文件，修改 `n = 3` 为你需要的数量。
+**Q: LLM 报 403 / 端点不可达？**
+检查 `.env` 的 `OPENAI_API_KEY` / `OPENAI_BASE_URL`；`worker.py` 启动时会做 `preflight_llm_check` 预检端点可达性。
 
-### Q: LLM 报错 403 Forbidden？
-如果使用 `ChatBrowserUse()`，免费账户不支持 LLM Gateway。请换用自己的 LLM API。
+**Q: 一直过不了 Cloudflare？**
+`cf_clearance` 绑定出口 IP，取证（`scripts/fetch_cf_cookie.py`）与主程序必须同一出口 IP；IP 信誉差时需住宅代理。
 
-### Q: 如何更换目标网站？
-编辑 `task.md`，修改目标 URL 和搜索策略。如需提取网页信息，同步更新 `Information.md` 中的 HTML 模式。
+## 进一步阅读
 
-### Q: 重命名失败？
-检查 `browseruse_agent_data/title.txt` 是否存在且格式正确（每行一个标题，最后一行为 `END`）。
-
-## 技术架构
-
-```
-用户 → task.md → main.py → Agent (LLM + Browser)
-                              ├── 浏览器操作（点击、下载）
-                              ├── 自定义工具（tools_registry.py）
-                              └── 文件系统（write_file, read_file）
-                           → rename_images.py → 完成
-```
+- [`WORKFLOW.md`](./WORKFLOW.md) — 完整架构、各文件职责、通用化路线图
+- [`plan.md`](./plan.md) — 清理进度与后续路线
 
 ## 许可证
 

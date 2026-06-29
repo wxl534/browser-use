@@ -1,7 +1,7 @@
-"""生成临时样例数据，用于本地开发/验证 Web 控制台。
+"""生成临时样例数据,用于本地开发/验证 Web 控制台.
 
-注意：写入真实 ImagesCache 目录，仅供开发预览；一次真实的 `--new-run`
-会归档并清空它。需要时手动重新运行本脚本即可。相对路径推导，无硬编码。
+注意:写入真实 ImagesCache 目录,仅供开发预览;一次真实的 `--new-run`
+会归档并清空它.需要时手动重新运行本脚本即可.相对路径推导,无硬编码.
 """
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ with open(record_file, 'w', encoding='utf-8') as f:
 
 print(f'写入 {len(records)} 条样例记录到 {record_file}')
 
-# 调用真实导入脚本建库，保证与生产路径一致。
+# 调用真实导入脚本建库,保证与生产路径一致.
 importer = BASE_DIR / 'import_records_to_sqlite.py'
 subprocess.run(
     [sys.executable, str(importer),
@@ -68,4 +68,4 @@ subprocess.run(
      '--db-file', str(CACHE_DIR / 'image_catalog.sqlite3')],
     cwd=str(BASE_DIR), check=True,
 )
-print('已导入 SQLite。')
+print('已导入 SQLite.')

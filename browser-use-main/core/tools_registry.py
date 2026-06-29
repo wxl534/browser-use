@@ -1,8 +1,8 @@
 """
 工具注册模块 - 自定义 browser-use Agent 工具
 
-将工具定义从 main.py 中提取出来，便于管理和复用。
-包含：
+将工具定义从 main.py 中提取出来,便于管理和复用.
+包含:
 - Pydantic 参数模型
 - Tools 实例和注册
 - extract_page_to_markdown 自定义 action
@@ -27,11 +27,11 @@ from pydantic import BaseModel, Field
 from adapters.idp import IDPAdapter
 from browser_use import ActionResult, Tools
 from concurrent_download import ConcurrentImageDownloader, image_download_concurrency
-from core.batch_download import run_search_page_batch
+from batch_download import run_search_page_batch
 from idp_page_progress import load_page_progress, mark_page_batch_result
 
-# 使用脚本所在目录作为项目基准路径；运行产物目录可由 main.py 动态配置
-PROJECT_DIR = Path(__file__).resolve().parent
+# 使用工程根目录作为项目基准路径(本模块位于 core/ 下,需回退一级);运行产物目录可由 worker.py 动态配置
+PROJECT_DIR = Path(__file__).resolve().parent.parent
 BASE_DIR = PROJECT_DIR
 RUN_DIR = Path(os.environ.get('BROWSER_USE_RUN_DIR', str(PROJECT_DIR))).resolve()
 IMAGE_DIR = Path(os.environ.get('BROWSER_USE_IMAGE_DIR', str(PROJECT_DIR / 'image'))).resolve()
@@ -95,27 +95,27 @@ class ExtractPageContentParams(BaseModel):
     output_filename: str = "page_content.md"
     output_dir: str = str(Path(__file__).resolve().parent / "image")
     format_type: str = "markdown"  # markdown, json, text
-    information_file_path: str = str(Path(__file__).resolve().parent / "Information.md")
+    information_file_path: str = str(Path(__file__).resolve().parent.parent / "legacy" / "Information.md")
 
 
 class WaitForHumanVerificationParams(BaseModel):
     """等待人工完成人机验证的参数模型"""
     timeout_seconds: int = Field(default=180, ge=1, le=900, description='最多等待人工完成验证的秒数')
     poll_interval_seconds: int = Field(default=5, ge=1, le=30, description='检查页面是否恢复的间隔秒数')
-    auto_click: bool = Field(default=True, description='是否先尝试自动点击 Cloudflare/Turnstile 复选框；失败再回退人工等待')
+    auto_click: bool = Field(default=True, description='是否先尝试自动点击 Cloudflare/Turnstile 复选框;失败再回退人工等待')
     auto_click_attempts: int = Field(default=3, ge=1, le=10, description='自动点击的最大尝试轮数')
 
 
 class RecordDownloadedImageParams(BaseModel):
     """记录已保存图片的参数模型"""
-    sequence: int = Field(ge=1, description='图片序号，从 1 开始，应与保存文件名顺序一致')
-    file_name: str = Field(description='已保存到 image 目录中的文件名，例如 temple_001.png')
-    title: str = Field(description='用于最终重命名的短标题，例如 寺_001_藏品标题_图1')
+    sequence: int = Field(ge=1, description='图片序号,从 1 开始,应与保存文件名顺序一致')
+    file_name: str = Field(description='已保存到 image 目录中的文件名,例如 temple_001.png')
+    title: str = Field(description='用于最终重命名的短标题,例如 寺_001_藏品标题_图1')
     collection_title: str = Field(default='', description='藏品页面显示的原始标题')
     page_url: str = Field(default='', description='藏品详情页 URL')
-    image_url: str = Field(default='', description='原始图片 URL，优先使用 /art_images/...-L.jpg')
+    image_url: str = Field(default='', description='原始图片 URL,优先使用 /art_images/...-L.jpg')
     evidence: str = Field(default='', description='判断与关键词相关的证据')
-    metadata: str = Field(default='', description='作者、时代、分类、馆藏号等信息')
+    metadata: str = Field(default='', description='作者,时代,分类,馆藏号等信息')
     summary: str = Field(default='', description='图片或藏品的简短中文说明')
     record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名')
     info_filename: str = Field(default='temple_photo_info.md', description='Markdown 信息表文件名')
@@ -123,42 +123,42 @@ class RecordDownloadedImageParams(BaseModel):
 
 class DownloadImageFromUrlParams(BaseModel):
     """通用图片 URL 下载并记录的参数模型"""
-    sequence: int = Field(ge=1, description='图片序号，从 1 开始；工具会自动修正为当前下一安全序号，避免覆盖')
-    file_name: str = Field(default='temple_001', description='保存文件名或基础名，例如 temple_001；扩展名会优先使用图片 URL 或响应类型')
-    title: str = Field(description='用于最终重命名的短标题，例如 china_temple_001_藏品标题_图1')
+    sequence: int = Field(ge=1, description='图片序号,从 1 开始;工具会自动修正为当前下一安全序号,避免覆盖')
+    file_name: str = Field(default='temple_001', description='保存文件名或基础名,例如 temple_001;扩展名会优先使用图片 URL 或响应类型')
+    title: str = Field(description='用于最终重命名的短标题,例如 china_temple_001_藏品标题_图1')
     collection_title: str = Field(default='', description='藏品页面显示的原始标题')
-    page_url: str = Field(default='', description='藏品详情页 URL；也会作为默认 Referer')
-    image_url: str = Field(default='', description='可直接访问的图片 URL，例如 IIIF /full/max/0/default.jpg、IIIF manifest URL 或 viewer 大图 URL；为空时会从当前页面自动查找候选图片 URL')
-    image_index: int = Field(default=0, ge=0, description='image_url 为空时，从当前页面自动候选列表中选择第几个，按大图优先排序')
+    page_url: str = Field(default='', description='藏品详情页 URL;也会作为默认 Referer')
+    image_url: str = Field(default='', description='可直接访问的图片 URL,例如 IIIF /full/max/0/default.jpg,IIIF manifest URL 或 viewer 大图 URL;为空时会从当前页面自动查找候选图片 URL')
+    image_index: int = Field(default=0, ge=0, description='image_url 为空时,从当前页面自动候选列表中选择第几个,按大图优先排序')
     evidence: str = Field(default='', description='判断与关键词相关的证据')
-    metadata: str = Field(default='', description='作者、时代、地点、分类、馆藏号等信息')
+    metadata: str = Field(default='', description='作者,时代,地点,分类,馆藏号等信息')
     summary: str = Field(default='', description='图片或藏品的简短中文说明')
-    referer: str = Field(default='', description='可选 Referer；为空时使用 page_url')
+    referer: str = Field(default='', description='可选 Referer;为空时使用 page_url')
     use_browser_cookies: bool = Field(default=True, description='Python 直连下载时是否附带当前浏览器会话 Cookie')
-    prefer_browser_fetch: bool = Field(default=False, description='是否优先使用浏览器上下文 fetch；为空策略时默认先用 Python 直连，失败后浏览器 fetch')
-    allow_clean_screenshot: bool = Field(default=True, description='直连和浏览器 fetch 都失败时，是否打开图片页并精确裁剪可见图片作为兜底')
+    prefer_browser_fetch: bool = Field(default=False, description='是否优先使用浏览器上下文 fetch;为空策略时默认先用 Python 直连,失败后浏览器 fetch')
+    allow_clean_screenshot: bool = Field(default=True, description='直连和浏览器 fetch 都失败时,是否打开图片页并精确裁剪可见图片作为兜底')
     black_threshold: int = Field(default=18, ge=0, le=80, description='截图兜底自动去黑边阈值')
     white_threshold: int = Field(default=245, ge=180, le=255, description='截图兜底自动去白边阈值')
-    border_ratio: float = Field(default=0.985, description='截图兜底一整行/列超过该比例为黑色或白色时才视为边框；工具会把异常值归一化到 0.90-0.999')
-    allowed_host_suffixes: list[str] = Field(default_factory=list, description='可选域名后缀白名单，例如 ["example.org", "data.example.org"]；为空时允许任意公网 http(s) 图片 URL')
+    border_ratio: float = Field(default=0.985, description='截图兜底一整行/列超过该比例为黑色或白色时才视为边框;工具会把异常值归一化到 0.90-0.999')
+    allowed_host_suffixes: list[str] = Field(default_factory=list, description='可选域名后缀白名单,例如 ["example.org", "data.example.org"];为空时允许任意公网 http(s) 图片 URL')
     record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名')
     info_filename: str = Field(default='temple_photo_info.md', description='Markdown 信息表文件名')
     timeout_seconds: int = Field(default=180, ge=30, le=900, description='直接下载超时时间')
-    force_generic: bool = Field(default=False, description='稳定优先：跳过站点专属的 URL→IIIF manifest 推导加速，只用传入/页面识别到的图片直链 + DOM 候选 + 三级兜底，对任意站点走同一条久经验证的通用路径（牺牲效率换稳定）')
+    force_generic: bool = Field(default=False, description='稳定优先:跳过站点专属的 URL→IIIF manifest 推导加速,只用传入/页面识别到的图片直链 + DOM 候选 + 三级兜底,对任意站点走同一条久经验证的通用路径(牺牲效率换稳定)')
 
 
 class NextSearchItemParams(BaseModel):
-    """next_search_item（统一发号）工具的参数模型。"""
-    keyword: str = Field(default='', description='当前搜索关键词，仅用于在游标文件里标注，可留空')
+    """next_search_item(统一发号)工具的参数模型."""
+    keyword: str = Field(default='', description='当前搜索关键词,仅用于在游标文件里标注,可留空')
     item_selector: str = Field(
         default='',
-        description='搜索结果页中 item 详情链接的 CSS 选择器；留空时按当前站点已注册的 hint 自动选择（如 idp.bl.uk 注册了 a[href*="/collection/"]）',
+        description='搜索结果页中 item 详情链接的 CSS 选择器;留空时按当前站点已注册的 hint 自动选择(如 idp.bl.uk 注册了 a[href*="/collection/"])',
     )
     mark_done_url: str = Field(
         default='',
-        description='可选：刚刚处理完（已下载或主动跳过）的那个 item 的详情页 URL；传入后会标记为已处理再发下一个',
+        description='可选:刚刚处理完(已下载或主动跳过)的那个 item 的详情页 URL;传入后会标记为已处理再发下一个',
     )
-    record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名，用于交叉核对已下载的 item')
+    record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名,用于交叉核对已下载的 item')
     max_scan: int = Field(default=500, ge=1, le=2000, description='单页最多枚举多少个 item')
 
 
@@ -181,12 +181,12 @@ registry = tools.registry
 
 # === Legacy 工具注册开关 ===
 #
-# LOC（Library of Congress）和 Kyohaku（京都国立博物馆）的整套适配器在当前 IDP
-# 主线任务里既不使用、也被 task.md 显式禁止；为了避免它们出现在 Agent 的工具列表
-# 里干扰决策，默认不注册。
+# LOC(Library of Congress)和 Kyohaku(京都国立博物馆)的整套适配器在当前 IDP
+# 主线任务里既不使用,也被 task.md 显式禁止;为了避免它们出现在 Agent 的工具列表
+# 里干扰决策,默认不注册.
 #
-# 如果以后要恢复使用，设环境变量 BROWSER_USE_ENABLE_LEGACY_TOOLS=1 即可，代码本身
-# 没有移动，原地仍可阅读和维护。详见 legacy/README.md。
+# 如果以后要恢复使用,设环境变量 BROWSER_USE_ENABLE_LEGACY_TOOLS=1 即可,代码本身
+# 没有移动,原地仍可阅读和维护.详见 legacy/README.md.
 LEGACY_TOOLS_ENABLED = os.environ.get('BROWSER_USE_ENABLE_LEGACY_TOOLS', '').strip() in {'1', 'true', 'TRUE', 'yes', 'YES'}
 
 
@@ -209,7 +209,7 @@ def legacy_tools_action(*args, **kwargs):
 
 # === 路径安全验证 ===
 
-# 允许访问的基础目录（基于项目位置）
+# 允许访问的基础目录(基于项目位置)
 ALLOWED_BASE_DIRS = [
     PROJECT_DIR,
     RUN_DIR,
@@ -219,7 +219,7 @@ ALLOWED_BASE_DIRS = [
 
 def configure_runtime_paths(run_dir: Path, image_dir: Path | None = None, data_dir: Path | None = None) -> None:
     """
-    配置本次运行的图片和数据目录。main.py 会在创建 ImagesCache 后调用。
+    配置本次运行的图片和数据目录.main.py 会在创建 ImagesCache 后调用.
     """
     global RUN_DIR, IMAGE_DIR, AGENT_DATA_DIR
     RUN_DIR = Path(run_dir).resolve()
@@ -237,8 +237,8 @@ def configure_runtime_paths(run_dir: Path, image_dir: Path | None = None, data_d
 
 def _is_path_allowed(target_path: str, allowed_bases: list[Path] = ALLOWED_BASE_DIRS) -> bool:
     """
-    验证目标路径是否在允许的基础目录下，
-    防止 LLM 通过工具参数读写任意文件。
+    验证目标路径是否在允许的基础目录下,
+    防止 LLM 通过工具参数读写任意文件.
     """
     try:
         resolved = Path(target_path).resolve()
@@ -252,9 +252,9 @@ def _is_path_allowed(target_path: str, allowed_bases: list[Path] = ALLOWED_BASE_
 
 def _resolve_extract_paths(params: "ExtractPageContentParams") -> tuple[Path, Path]:
     """
-    解析并校验提取工具的输入路径，不合法时回退到项目默认路径。
+    解析并校验提取工具的输入路径,不合法时回退到项目默认路径.
     """
-    default_info_path = BASE_DIR / 'Information.md'
+    default_info_path = BASE_DIR / 'legacy' / 'Information.md'
     default_output_dir = IMAGE_DIR
 
     raw_info_path = (params.information_file_path or '').strip()
@@ -278,7 +278,7 @@ def _resolve_extract_paths(params: "ExtractPageContentParams") -> tuple[Path, Pa
 
 def _safe_extract_filename(filename: str, file_ext: str) -> str:
     """
-    为提取出的 Markdown/JSON/TXT 生成稳定安全的文件名，避免 agent 传入目录、空值或 Windows 特殊字符。
+    为提取出的 Markdown/JSON/TXT 生成稳定安全的文件名,避免 agent 传入目录,空值或 Windows 特殊字符.
     """
     raw_name = _normalize_title(filename, fallback='page_content')
     raw_name = Path(raw_name).name
@@ -294,7 +294,7 @@ def _safe_extract_filename(filename: str, file_ext: str) -> str:
 
 def _load_information_patterns(info_file_path: Path) -> list[dict]:
     """
-    读取 Information.md 并提取 HTML 代码块的首尾模式。
+    读取 Information.md 并提取 HTML 代码块的首尾模式.
     """
     if not info_file_path.exists():
         raise FileNotFoundError(f'Information.md文件不存在: {info_file_path}')
@@ -327,7 +327,7 @@ def _load_information_patterns(info_file_path: Path) -> list[dict]:
 
 def _write_extracted_file(output_dir: Path, file_name: str, file_content: str) -> Path:
     """
-    把提取结果写入磁盘。
+    把提取结果写入磁盘.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / file_name
@@ -337,7 +337,7 @@ def _write_extracted_file(output_dir: Path, file_name: str, file_content: str) -
 
 def _normalize_title(title: str, fallback: str = 'untitled') -> str:
     """
-    清理图片标题，保证每个标题只占一行（用于文件名词干、记录字段和信息表）。
+    清理图片标题,保证每个标题只占一行(用于文件名词干,记录字段和信息表).
     """
     normalized = title.replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ')
     normalized = re.sub(r'\s+', ' ', normalized).strip()
@@ -346,7 +346,7 @@ def _normalize_title(title: str, fallback: str = 'untitled') -> str:
 
 def _safe_download_filename(title: str, url: str, suffix: str = '.tif') -> str:
     """
-    根据标题生成稳定、安全的下载文件名。
+    根据标题生成稳定,安全的下载文件名.
     """
     normalized = _normalize_title(title, fallback='untitled')
     safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', normalized)
@@ -360,7 +360,7 @@ def _safe_download_filename(title: str, url: str, suffix: str = '.tif') -> str:
 
 def _unique_path(path: Path) -> Path:
     """
-    如果文件已存在，追加短 hash 避免覆盖。
+    如果文件已存在,追加短 hash 避免覆盖.
     """
     if not path.exists():
         return path
@@ -375,7 +375,7 @@ def _unique_path(path: Path) -> Path:
 
 def _current_tiff_files(output_dir: Path) -> dict[Path, float]:
     """
-    记录当前目录中已完成的 TIFF 文件，用于识别浏览器兜底下载产生的新文件。
+    记录当前目录中已完成的 TIFF 文件,用于识别浏览器兜底下载产生的新文件.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     return {
@@ -395,7 +395,7 @@ async def _download_file(
     cookies: str | None = None,
 ) -> Path:
     """
-    用 Python 直接下载文件，避免浏览器下载 tab / .crdownload / watchdog 状态采集干扰。
+    用 Python 直接下载文件,避免浏览器下载 tab / .crdownload / watchdog 状态采集干扰.
     """
     target_dir = output_dir or IMAGE_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -439,7 +439,7 @@ async def _download_file(
 
 async def _get_browser_cookie_header(browser_session, urls: list[str]) -> str:
     """
-    从当前浏览器会话提取相关 URL 的 Cookie,供 Python 直接下载使用。
+    从当前浏览器会话提取相关 URL 的 Cookie,供 Python 直接下载使用.
     """
     try:
         cdp_session = await browser_session.get_or_create_cdp_session()
@@ -485,7 +485,7 @@ def _load_jsonl_records(path: Path) -> list[dict]:
 
 def _image_record_file(record_filename: str = 'image_record.jsonl') -> Path:
     """
-    获取图片记录文件路径，并限制文件名只能落在 browseruse_agent_data 下。
+    获取图片记录文件路径,并限制文件名只能落在 browseruse_agent_data 下.
     """
     normalized = re.sub(r'\s+', '', str(record_filename or '').strip())
     safe_name = Path(normalized).name
@@ -496,7 +496,7 @@ def _image_record_file(record_filename: str = 'image_record.jsonl') -> Path:
 
 def _max_downloaded_record_sequence(record_filename: str = 'image_record.jsonl') -> int:
     """
-    返回已成功下载记录中的最大序号，避免 agent 传错 start_sequence 后覆盖旧图。
+    返回已成功下载记录中的最大序号,避免 agent 传错 start_sequence 后覆盖旧图.
     """
     max_sequence = 0
     for record in _load_image_records(_image_record_file(record_filename)):
@@ -511,7 +511,7 @@ def _max_downloaded_record_sequence(record_filename: str = 'image_record.jsonl')
 
 def _max_image_file_sequence(file_prefix: str = 'temple') -> int:
     """
-    返回 image 目录中同前缀文件名的最大数字序号。
+    返回 image 目录中同前缀文件名的最大数字序号.
     """
     prefix = re.escape((file_prefix or 'temple').strip() or 'temple')
     pattern = re.compile(rf'^{prefix}_(\d+)(?:[_-].*)?$', re.IGNORECASE)
@@ -551,7 +551,7 @@ def _prefix_from_filename(file_name: str, default: str = 'temple') -> str:
 
 def _numbered_file_stem(file_name: str, sequence: int, default_prefix: str = 'temple') -> str:
     """
-    把文件名调整为 prefix_###，避免重复使用 agent 传入的旧序号。
+    把文件名调整为 prefix_###,避免重复使用 agent 传入的旧序号.
     """
     stem = Path(file_name or '').stem.strip()
     prefix = _prefix_from_filename(stem, default_prefix)
@@ -568,7 +568,7 @@ def _safe_requested_image_sequence(
     file_prefix: str = 'temple',
 ) -> tuple[int, str]:
     """
-    如果 agent 传入的序号已经用过或会覆盖文件，自动提升到安全序号。
+    如果 agent 传入的序号已经用过或会覆盖文件,自动提升到安全序号.
     """
     next_sequence = _next_available_image_sequence(record_filename, file_prefix)
     if requested_sequence != next_sequence:
@@ -583,8 +583,8 @@ def _safe_record_sequence_for_existing_file(
     image_path: Path,
 ) -> tuple[int, str]:
     """
-    record_downloaded_image 接收的是已落地的临时文件。若临时文件本身就是本次请求序号
-    （如 temple_001.jpg），不能再把它算作“已占用”而跳到 002。
+    record_downloaded_image 接收的是已落地的临时文件.若临时文件本身就是本次请求序号
+    (如 temple_001.jpg),不能再把它算作“已占用”而跳到 002.
     """
     records = _load_image_records(_image_record_file(record_filename))
     used_sequences = {
@@ -633,7 +633,7 @@ def _coerce_int(value, default: int, minimum: int, maximum: int) -> int:
 def _clean_url_text(url: str) -> str:
     cleaned = str(url or '').strip()
     cleaned = cleaned.strip('`"\' \t\r\n')
-    cleaned = re.sub(r'[\]\)},，。；;]+$', '', cleaned)
+    cleaned = re.sub(r'[\]\)},,.;;]+$', '', cleaned)
     return cleaned
 
 
@@ -641,7 +641,7 @@ def _sanitize_allowed_host_suffixes(suffixes: list[str] | None) -> list[str]:
     cleaned: list[str] = []
     for raw in suffixes or []:
         text = str(raw or '').strip().strip('[](){}"\'`')
-        for part in re.split(r'[,，\s]+', text):
+        for part in re.split(r'[,,\s]+', text):
             host = part.strip().strip('[]"\'`.').lower()
             if not host or '/' in host or ':' in host:
                 continue
@@ -667,7 +667,7 @@ def _write_json_list(path: Path, items: list[dict]) -> None:
 
 def _safe_agent_data_filename(filename: str, fallback: str) -> str:
     """
-    限制 agent 数据文件名只能落在 browseruse_agent_data 根目录，避免目录穿越。
+    限制 agent 数据文件名只能落在 browseruse_agent_data 根目录,避免目录穿越.
     """
     normalized = re.sub(r'\s+', '', str(filename or fallback).strip())
     safe_name = Path(normalized or fallback).name
@@ -727,7 +727,7 @@ def _record_sequence(record: dict) -> int | None:
 
 def _markdown_cell(value: object) -> str:
     """
-    转义 Markdown 表格单元格，保持记录文件可解析。
+    转义 Markdown 表格单元格,保持记录文件可解析.
     """
     text = str(value or '').replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ')
     text = text.replace('|', '\\|')
@@ -768,7 +768,7 @@ def _rewrite_image_info_file(data_dir: Path, records: list[dict], info_filename:
 
 def _record_image_file_path(file_name: str) -> Path:
     """
-    将保存文件名解析到项目 image 目录；只接受文件名，禁止目录穿越。
+    将保存文件名解析到项目 image 目录;只接受文件名,禁止目录穿越.
     """
     safe_name = Path(file_name).name
     return IMAGE_DIR / safe_name
@@ -806,12 +806,12 @@ def _source_hash(page_url: str, image_url: str, image_index: int = 0) -> str:
 
 
 def _source_item_id_from_urls(page_url: str, image_url: str = '') -> str:
-    """从 URL 提取站内 item id：优先用站点 hint，无则用通用兜底（URL 路径末段）。"""
+    """从 URL 提取站内 item id:优先用站点 hint,无则用通用兜底(URL 路径末段)."""
     site_id = _site_item_id_from_urls(page_url, image_url)
     if site_id:
         return site_id
-    # 通用兜底：取详情页 URL 路径里最后一个非空、非纯数字的路径段作为 item id，
-    # 对任意站点都给出一个稳定可读的标识（牺牲站点精度换全站点可用）。
+    # 通用兜底:取详情页 URL 路径里最后一个非空,非纯数字的路径段作为 item id,
+    # 对任意站点都给出一个稳定可读的标识(牺牲站点精度换全站点可用).
     for raw_url in (page_url, image_url):
         parsed = urlparse((raw_url or '').strip())
         path_parts = [part for part in parsed.path.split('/') if part]
@@ -824,11 +824,11 @@ def _source_item_id_from_urls(page_url: str, image_url: str = '') -> str:
 
 def _titled_image_stem(title: str, sequence: int) -> str:
     """
-    生成"序号_标题"形式的可读文件名词干（不含 hash 后缀、不含扩展名）。
+    生成"序号_标题"形式的可读文件名词干(不含 hash 后缀,不含扩展名).
 
-    既用于下载落地时的临时名（落地即可读：以图片自己的 title 命名），
-    也用于最终名的前缀部分；最终名再在其后追加信息 hash。两处共用同一词干，
-    保证临时名与最终名的可读前缀完全一致。
+    既用于下载落地时的临时名(落地即可读:以图片自己的 title 命名),
+    也用于最终名的前缀部分;最终名再在其后追加信息 hash.两处共用同一词干,
+    保证临时名与最终名的可读前缀完全一致.
     """
     normalized_title = _normalize_title(title, fallback=f'image_{sequence:03d}')
     normalized_title = re.sub(r'^(?:temple|image)_\d{1,6}_?', '', normalized_title, flags=re.IGNORECASE)
@@ -841,11 +841,11 @@ def _titled_image_stem(title: str, sequence: int) -> str:
 
 def _final_image_filename(title: str, sequence: int, embed_hash: str, suffix: str) -> str:
     """
-    最终文件名 = 序号_标题_信息hash8位.ext。
+    最终文件名 = 序号_标题_信息hash8位.ext.
 
-    ``embed_hash`` 是要嵌入文件名的指纹，调用方传入该图片"对应信息"的 source_hash
-    （sha256(page_url|image_url|index)），使文件名自带信息绑定指纹，海量数据下也能
-    把图片与其信息一一对应、不串位。
+    ``embed_hash`` 是要嵌入文件名的指纹,调用方传入该图片"对应信息"的 source_hash
+    (sha256(page_url|image_url|index)),使文件名自带信息绑定指纹,海量数据下也能
+    把图片与其信息一一对应,不串位.
     """
     safe_stem = _titled_image_stem(title, sequence)
     short_hash = (embed_hash or '')[:8] or 'nohash'
@@ -923,12 +923,12 @@ def _build_download_record_index(record_filename: str = 'image_record.jsonl') ->
 
 def _build_existing_image_hash_index(record_index: 'DownloadRecordIndex | None' = None) -> dict[str, Path]:
     """
-    扫描 IMAGE_DIR 建立 sha256 -> Path 索引，供本批次去重使用。
+    扫描 IMAGE_DIR 建立 sha256 -> Path 索引,供本批次去重使用.
 
-    现实里每次新批次都重新 sha256 整个 image 目录会让"下载越多越慢"——
-    一千张 TIFF 起步就是几个 GB 的 IO。优化：优先复用 image_record.jsonl
-    里已经存好的 sha256（O(1) 取值），只对没有对应记录的孤儿文件再走真正
-    的 sha256 计算。
+    现实里每次新批次都重新 sha256 整个 image 目录会让"下载越多越慢"--
+    一千张 TIFF 起步就是几个 GB 的 IO.优化:优先复用 image_record.jsonl
+    里已经存好的 sha256(O(1) 取值),只对没有对应记录的孤儿文件再走真正
+    的 sha256 计算.
     """
     existing: dict[str, Path] = {}
     if not IMAGE_DIR.exists():
@@ -959,7 +959,7 @@ def _build_existing_image_hash_index(record_index: 'DownloadRecordIndex | None' 
     return existing
 
 
-# === 逐项下载工具的缓存索引（避免每张图重读整张 JSONL，把 O(N^2) 降到 O(N)）===
+# === 逐项下载工具的缓存索引(避免每张图重读整张 JSONL,把 O(N^2) 降到 O(N))===
 
 # key: str(record_file) -> {'index', 'existing_image_hashes', 'record_mtime', 'image_dir'}
 _GENERIC_DOWNLOAD_INDEX_CACHE: dict[str, dict] = {}
@@ -976,12 +976,12 @@ def _get_cached_download_index(
     record_filename: str = 'image_record.jsonl',
 ) -> tuple['DownloadRecordIndex', dict[str, Path], dict]:
     """
-    返回 (内存索引, IMAGE_DIR 的 sha256->Path 索引, 缓存条目)。
+    返回 (内存索引, IMAGE_DIR 的 sha256->Path 索引, 缓存条目).
 
-    跨多次 download_image_from_url 调用复用：只要 image_record.jsonl 的 mtime
-    和当前 IMAGE_DIR 没变，就直接复用已建好的 O(1) 索引；变了才重建。
-    本工具自己 append 写记录后会调用 _refresh_generic_index_mtime 刷新 mtime，
-    避免把自己的写入误判成外部改动而反复重建。
+    跨多次 download_image_from_url 调用复用:只要 image_record.jsonl 的 mtime
+    和当前 IMAGE_DIR 没变,就直接复用已建好的 O(1) 索引;变了才重建.
+    本工具自己 append 写记录后会调用 _refresh_generic_index_mtime 刷新 mtime,
+    避免把自己的写入误判成外部改动而反复重建.
     """
     record_file = _image_record_file(record_filename)
     key = str(record_file)
@@ -1021,8 +1021,8 @@ def _safe_requested_image_sequence_from_index(
     file_prefix: str = 'temple',
 ) -> tuple[int, str]:
     """
-    用内存索引的 max_sequence 取下一安全序号，免重读 JSONL。
-    同时兼顾 image 目录里同前缀文件的最大序号，避免覆盖孤儿文件。
+    用内存索引的 max_sequence 取下一安全序号,免重读 JSONL.
+    同时兼顾 image 目录里同前缀文件的最大序号,避免覆盖孤儿文件.
     """
     next_sequence = max(index.max_sequence, _max_image_file_sequence(file_prefix)) + 1
     if requested_sequence != next_sequence:
@@ -1030,7 +1030,7 @@ def _safe_requested_image_sequence_from_index(
     return next_sequence, ''
 
 
-# === 站点 hint 注册表：让逐项下载工具保持纯通用，站点差异通过注册下沉 ===
+# === 站点 hint 注册表:让逐项下载工具保持纯通用,站点差异通过注册下沉 ===
 
 # 每项: {'hosts': tuple[str, ...], 'manifest': callable|None, 'invalid_collection': callable|None}
 _SITE_DOWNLOAD_HINTS: list[dict] = []
@@ -1046,11 +1046,11 @@ def register_download_site_hint(
     item_link_selector: str = '',
 ) -> None:
     """
-    注册某站点的下载 hint：从详情页 URL 推导 IIIF manifest、非法 collection URL 判定、
-    合法详情页 URL 判定、从 URL 提取站内 item id，以及搜索结果页中"item 详情链接"的 CSS 选择器
-    （供 next_search_item 按 DOM 顺序枚举本页 item）。
-    download_image_from_url / next_search_item 通过通用分发调用这些 hint，新增站点只需在此注册，
-    无需改下载/发号工具本身，通用核心也不含任何站点硬编码。
+    注册某站点的下载 hint:从详情页 URL 推导 IIIF manifest,非法 collection URL 判定,
+    合法详情页 URL 判定,从 URL 提取站内 item id,以及搜索结果页中"item 详情链接"的 CSS 选择器
+    (供 next_search_item 按 DOM 顺序枚举本页 item).
+    download_image_from_url / next_search_item 通过通用分发调用这些 hint,新增站点只需在此注册,
+    无需改下载/发号工具本身,通用核心也不含任何站点硬编码.
     """
     normalized_hosts = tuple(h.strip().lower() for h in hosts if h and h.strip())
     _SITE_DOWNLOAD_HINTS.append({
@@ -1073,7 +1073,7 @@ def _matching_site_hints(url: str):
 
 
 def _site_manifest_url_from_page_url(page_url: str) -> str:
-    """通用分发：若有站点 hint 能从详情页 URL 推导出 IIIF manifest，返回之；否则空串。"""
+    """通用分发:若有站点 hint 能从详情页 URL 推导出 IIIF manifest,返回之;否则空串."""
     for hint in _matching_site_hints(page_url):
         fn = hint.get('manifest')
         if fn is None:
@@ -1088,7 +1088,7 @@ def _site_manifest_url_from_page_url(page_url: str) -> str:
 
 
 def _site_invalid_collection_url(url: str) -> bool:
-    """通用分发：若有站点 hint 判定该 URL 为非法 collection/列表页，返回 True。"""
+    """通用分发:若有站点 hint 判定该 URL 为非法 collection/列表页,返回 True."""
     for hint in _matching_site_hints(url):
         fn = hint.get('invalid_collection')
         if fn is None:
@@ -1102,7 +1102,7 @@ def _site_invalid_collection_url(url: str) -> bool:
 
 
 def _site_item_selector(url: str) -> str:
-    """通用分发：返回该站点搜索结果页"item 详情链接"的 CSS 选择器；无则空串。"""
+    """通用分发:返回该站点搜索结果页"item 详情链接"的 CSS 选择器;无则空串."""
     for hint in _matching_site_hints(url):
         selector = (hint.get('item_link_selector') or '').strip()
         if selector:
@@ -1111,7 +1111,7 @@ def _site_item_selector(url: str) -> str:
 
 
 def _site_valid_page_url(url: str) -> bool:
-    """通用分发：若有站点 hint 判定该 URL 为合法详情页，返回 True；无 hint 时返回 False。"""
+    """通用分发:若有站点 hint 判定该 URL 为合法详情页,返回 True;无 hint 时返回 False."""
     for hint in _matching_site_hints(url):
         fn = hint.get('valid_page')
         if fn is None:
@@ -1125,7 +1125,7 @@ def _site_valid_page_url(url: str) -> bool:
 
 
 def _site_item_id_from_urls(page_url: str, image_url: str = '') -> str:
-    """通用分发：若有站点 hint 能从 URL 提取站内 item id，返回之；否则空串。"""
+    """通用分发:若有站点 hint 能从 URL 提取站内 item id,返回之;否则空串."""
     for raw_url in (page_url, image_url):
         for hint in _matching_site_hints(raw_url or ''):
             fn = hint.get('item_id')
@@ -1200,8 +1200,8 @@ async def _record_saved_image_fast(
     It intentionally avoids record_downloaded_image(), which reloads JSONL and
     rescans IMAGE_DIR on every call.
 
-    ``precomputed_file_hash`` 允许调用方传入已经算好的 sha256，避免一张图被
-    哈希两次（批量循环外面会先算一次用于内容去重）。
+    ``precomputed_file_hash`` 允许调用方传入已经算好的 sha256,避免一张图被
+    哈希两次(批量循环外面会先算一次用于内容去重).
     """
     try:
         data_dir = AGENT_DATA_DIR
@@ -1262,8 +1262,8 @@ async def _record_saved_image_fast(
                 long_term_memory=f'来源已记录，跳过重复记录: {existing_record.get("file_name", "")}',
             )
 
-        # 最终名后缀嵌入信息 hash（source_hash），让文件名自带"图片↔信息"绑定指纹；
-        # 完整性仍用内容 sha256(file_hash) 校验（与文件名无关）。
+        # 最终名后缀嵌入信息 hash(source_hash),让文件名自带"图片↔信息"绑定指纹;
+        # 完整性仍用内容 sha256(file_hash) 校验(与文件名无关).
         embed_hash = source_hash or file_hash
         image_path = _rename_image_to_final_name(image_path, normalized_title, sequence, embed_hash)
         final_file_hash = _sha256_file(image_path)
@@ -1509,8 +1509,8 @@ def _write_image_bytes_to_file(
 
 async def _browser_fetch_image_to_file(browser_session, image_url: str, target_file_name: str) -> Path:
     """
-    在浏览器页面上下文中 fetch 图片，等价于使用当前浏览器会话/权限获取图片资源。
-    这比驱动原生右键菜单稳定，也能使用站点 Cookie。
+    在浏览器页面上下文中 fetch 图片,等价于使用当前浏览器会话/权限获取图片资源.
+    这比驱动原生右键菜单稳定,也能使用站点 Cookie.
     """
     js_code = '''
     (async function(url) {
@@ -1565,7 +1565,7 @@ async def _browser_fetch_image_to_file(browser_session, image_url: str, target_f
 
 def _trim_plain_border_from_image(image, black_threshold: int, white_threshold: int, border_ratio: float):
     """
-    只裁掉几乎整行/整列都是黑色或白色的外边框，避免误裁作品本身的深色/浅色区域。
+    只裁掉几乎整行/整列都是黑色或白色的外边框,避免误裁作品本身的深色/浅色区域.
     """
     import numpy as np
 
@@ -1720,7 +1720,7 @@ async def _save_clean_visible_image_screenshot(
 
 async def _detect_human_verification(browser_session) -> dict:
     """
-    检测当前页面是否处于 Cloudflare / 人机验证页。
+    检测当前页面是否处于 Cloudflare / 人机验证页.
     """
     js_code = r'''
     (function() {
@@ -1753,11 +1753,11 @@ async def _detect_human_verification(browser_session) -> dict:
 
 async def _collect_verification_click_targets(browser_session) -> dict:
     """
-    收集页面上可能承载 Cloudflare/Turnstile 复选框的元素矩形（视口 CSS 像素坐标）。
+    收集页面上可能承载 Cloudflare/Turnstile 复选框的元素矩形(视口 CSS 像素坐标).
 
-    Turnstile 复选框位于跨域 iframe（challenges.cloudflare.com）内，顶层文档无法用
-    querySelector 穿透；因此这里只取容器 iframe / 小部件 / 顶层 checkbox 的矩形，
-    具体点击点由调用方推算，再用 CDP Input.dispatchMouseEvent 在该坐标派发可信点击。
+    Turnstile 复选框位于跨域 iframe(challenges.cloudflare.com)内,顶层文档无法用
+    querySelector 穿透;因此这里只取容器 iframe / 小部件 / 顶层 checkbox 的矩形,
+    具体点击点由调用方推算,再用 CDP Input.dispatchMouseEvent 在该坐标派发可信点击.
     """
     js_code = r'''
     (function() {
@@ -1790,11 +1790,11 @@ async def _collect_verification_click_targets(browser_session) -> dict:
 
 def _verification_click_points(targets_info: dict) -> list[tuple[float, float]]:
     """
-    把矩形列表转换成一组按优先级排序的候选点击坐标。
+    把矩形列表转换成一组按优先级排序的候选点击坐标.
 
-    - 顶层 checkbox：直接点中心。
-    - 小尺寸 Turnstile 小部件/iframe（典型 ~300x65）：复选框在左侧，点 (left+~30, 垂直中心)。
-    - 大尺寸全屏挑战 iframe：复选框通常在左上区域，按经验点 (left+45, top+55)，并补一个中心点兜底。
+    - 顶层 checkbox:直接点中心.
+    - 小尺寸 Turnstile 小部件/iframe(典型 ~300x65):复选框在左侧,点 (left+~30, 垂直中心).
+    - 大尺寸全屏挑战 iframe:复选框通常在左上区域,按经验点 (left+45, top+55),并补一个中心点兜底.
     """
     points: list[tuple[float, float]] = []
     seen: set[tuple[int, int]] = set()
@@ -1822,9 +1822,9 @@ def _verification_click_points(targets_info: dict) -> list[tuple[float, float]]:
 
 
 async def _cdp_click_point(browser_session, x: float, y: float) -> None:
-    """用 CDP Input.dispatchMouseEvent 在视口坐标 (x, y) 派发一次可信左键点击。
+    """用 CDP Input.dispatchMouseEvent 在视口坐标 (x, y) 派发一次可信左键点击.
 
-    CDP 输入事件带 isTrusted=true，可穿透跨域 iframe 边界，满足 Turnstile 对用户手势的要求。
+    CDP 输入事件带 isTrusted=true,可穿透跨域 iframe 边界,满足 Turnstile 对用户手势的要求.
     """
     cdp_session = await browser_session.get_or_create_cdp_session()
     client = cdp_session.cdp_client
@@ -1845,9 +1845,9 @@ async def _cdp_click_point(browser_session, x: float, y: float) -> None:
 
 
 async def _attempt_cloudflare_autoclick(browser_session, *, attempts: int, settle_seconds: float = 3.0) -> bool:
-    """尝试自动点击 Cloudflare/Turnstile 复选框；挑战消失返回 True，否则 False。
+    """尝试自动点击 Cloudflare/Turnstile 复选框;挑战消失返回 True,否则 False.
 
-    仅能处理"单击放行"型 managed challenge；交互式拼图类无法自动解，会回退人工。
+    仅能处理"单击放行"型 managed challenge;交互式拼图类无法自动解,会回退人工.
     """
     for _ in range(attempts):
         state = await _detect_human_verification(browser_session)
@@ -1859,7 +1859,7 @@ async def _attempt_cloudflare_autoclick(browser_session, *, attempts: int, settl
             targets_info = {}
         points = _verification_click_points(targets_info)
         if not points:
-            # 找不到可点控件（可能 iframe 尚未渲染），等待后重试。
+            # 找不到可点控件(可能 iframe 尚未渲染),等待后重试.
             await asyncio.sleep(settle_seconds)
             continue
         for (x, y) in points:
@@ -2169,7 +2169,7 @@ def _resolve_generic_image_url(
     if params_image_url.strip():
         return _validate_public_image_url(urljoin(page_url or page_data.get('page_url', ''), params_image_url.strip()), allowed_host_suffixes), candidates
     if not candidates:
-        raise RuntimeError('当前页面未找到可下载的公网图片 URL；如页面已显示大图，可允许 clean_screenshot 兜底。')
+        raise RuntimeError('当前页面未找到可下载的公网图片 URL;如页面已显示大图,可允许 clean_screenshot 兜底.')
     if image_index >= len(candidates):
         raise RuntimeError(f'图片索引 {image_index} 超出范围，当前找到 {len(candidates)} 个通用图片候选。')
     return _validate_public_image_url(candidates[image_index], allowed_host_suffixes), candidates
@@ -2314,12 +2314,12 @@ async def _current_browser_url(browser_session) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 搜索结果页 item 游标（next_search_item 工具用）
+# 搜索结果页 item 游标(next_search_item 工具用)
 #
-# 解决"逐 item 通用下载流程没有页内序号游标"的缺口：进入搜索结果页后按 DOM 顺序
-# （左→右、上→下）枚举本页所有 item，以 image_record.jsonl（真实下载记录）+ 本游标
-# 文件为"已处理"事实来源，统一发号"下一个该处理的 item 序号 + URL"，避免 LLM 忘记
-# 处理到哪个而导致的错位 / 跳过 / 重复循环。
+# 解决"逐 item 通用下载流程没有页内序号游标"的缺口:进入搜索结果页后按 DOM 顺序
+# (左→右,上→下)枚举本页所有 item,以 image_record.jsonl(真实下载记录)+ 本游标
+# 文件为"已处理"事实来源,统一发号"下一个该处理的 item 序号 + URL",避免 LLM 忘记
+# 处理到哪个而导致的错位 / 跳过 / 重复循环.
 # ---------------------------------------------------------------------------
 
 SEARCH_ITEM_CURSOR_FILE = 'search_item_cursor.json'
@@ -2365,7 +2365,7 @@ _SEARCH_ITEM_ENUM_JS_TEMPLATE = r'''
             } catch (_) {
                 continue;
             }
-            // 归一化：去 fragment、去末尾斜杠，与 Python 端 _normalize_source_url 对齐
+            // 归一化:去 fragment,去末尾斜杠,与 Python 端 _normalize_source_url 对齐
             let key = url.split('#')[0];
             if (key.length > 1 && key.endsWith('/')) key = key.slice(0, -1);
             key = key.toLowerCase();
@@ -2404,7 +2404,7 @@ def _build_search_item_enum_js(selector: str, cap: int) -> str:
 
 
 async def _enumerate_current_page_items(browser_session, selector: str, cap: int = 500) -> dict:
-    """在当前 tab 按 DOM 顺序（左→右、上→下）枚举 item 详情链接，去重后返回有序清单。"""
+    """在当前 tab 按 DOM 顺序(左→右,上→下)枚举 item 详情链接,去重后返回有序清单."""
     js_code = _build_search_item_enum_js(selector, cap)
     cdp_session = await browser_session.get_or_create_cdp_session()
     result = await cdp_session.cdp_client.send.Runtime.evaluate(
@@ -2422,7 +2422,7 @@ async def _enumerate_current_page_items(browser_session, selector: str, cap: int
 
 
 def _recorded_page_urls(record_filename: str = 'image_record.jsonl') -> set[str]:
-    """从 image_record.jsonl 收集已成功下载过的 item 详情页 URL（归一化），作为已处理事实来源。"""
+    """从 image_record.jsonl 收集已成功下载过的 item 详情页 URL(归一化),作为已处理事实来源."""
     processed: set[str] = set()
     for record in _load_image_records(_image_record_file(record_filename)):
         page_url = record.get('page_url') or ''
@@ -2440,10 +2440,10 @@ def _select_next_search_item(
     record_filename: str = 'image_record.jsonl',
 ) -> dict:
     """
-    统一发号核心逻辑：
-    - 以"游标 done 集合 ∪ image_record.jsonl 中已记录的 page_url"为已处理事实来源；
-    - 返回 DOM 顺序里第一个未处理的 item（序号 + URL + title）；全处理完则标记本页 done。
-    游标按归一化后的搜索结果页 URL 作 key，跨调用 / 跨进程续跑稳定。
+    统一发号核心逻辑:
+    - 以"游标 done 集合 ∪ image_record.jsonl 中已记录的 page_url"为已处理事实来源;
+    - 返回 DOM 顺序里第一个未处理的 item(序号 + URL + title);全处理完则标记本页 done.
+    游标按归一化后的搜索结果页 URL 作 key,跨调用 / 跨进程续跑稳定.
     """
     page_key = _normalize_source_url(current_page_url)
     cursor = _load_search_item_cursor()
@@ -2647,7 +2647,7 @@ def _format_output(
     page_url: str,
     format_type: str,
 ) -> tuple[str, str]:
-    """根据格式类型生成输出内容，返回 (content, file_extension)。"""
+    """根据格式类型生成输出内容,返回 (content, file_extension)."""
     fmt = format_type.lower()
 
     if fmt == 'json':
@@ -2680,7 +2680,7 @@ def _format_output(
             lines.append("")
         return "\n".join(lines), '.txt'
 
-    # markdown（默认）
+    # markdown(默认)
     md = f"# {page_title}\n\n"
     md += f"**URL**: {page_url}\n\n"
     md += f"**找到匹配的HTML代码块数量**: {len(found_blocks)}\n\n"
@@ -2696,13 +2696,13 @@ def _format_output(
 # === 下载格式选择工具 ===
 
 
-# === 工具拆分：导入 tool_actions/ 下各工具，触发 @tools.action 注册并 re-export ===
-# 必须放在文件末尾——此处所有共享 helper / 参数模型 / 运行时全局均已定义，
-# 各 tool 模块 `from tools_registry import ...` 才能解析成功（标准的“底部注册”模式）。
+# === 工具拆分:导入 tool_actions/ 下各工具,触发 @tools.action 注册并 re-export ===
+# 必须放在文件末尾--此处所有共享 helper / 参数模型 / 运行时全局均已定义,
+# 各 tool 模块 `from tools_registry import ...` 才能解析成功(标准的“底部注册”模式).
 #
-# 先导入可插拔站点模块（sites/），触发其 register_download_site_hint 注入，并把
-# 站点特有的参数模型 / 进度 helper re-export 到本模块命名空间，供下游
-# tool_actions / main.py 继续 `from tools_registry import ...`（保持调用点不变）。
+# 先导入可插拔站点模块(sites/),触发其 register_download_site_hint 注入,并把
+# 站点特有的参数模型 / 进度 helper re-export 到本模块命名空间,供下游
+# tool_actions / main.py 继续 `from tools_registry import ...`(保持调用点不变).
 from sites.idp import (  # noqa: E402,F401
     NavigateIdpSearchPageParams,
     DownloadCurrentIdpSearchPageImagesParams,
@@ -2716,14 +2716,11 @@ from tool_actions.record_downloaded_image import record_downloaded_image  # noqa
 from tool_actions.validate_download_completion import validate_download_completion  # noqa: E402,F401
 from tool_actions.finish_download_task import finish_download_task  # noqa: E402,F401
 from tool_actions.navigate_idp_search_page import navigate_idp_search_page  # noqa: E402,F401
-from tool_actions.next_search_item import next_search_item  # noqa: E402,F401
 from tool_actions.download_current_idp_search_page_images import download_current_idp_search_page_images  # noqa: E402,F401
-from tool_actions.download_image_from_url import download_image_from_url  # noqa: E402,F401
-from tool_actions.extract_page_to_markdown import extract_page_to_markdown  # noqa: E402,F401
 
-# === LOC / Kyohaku 站点特有工具（已物理迁出到 legacy/site_tools.py）===
-# 仅 import 触发其内部 @legacy_tools_action 注册（默认不注册，需
-# BROWSER_USE_ENABLE_LEGACY_TOOLS=1 才进入 agent 工具目录）。必须放在所有
-# tool_actions 导入之后——legacy 模块会 `from tools_registry import record_downloaded_image`
-# 等底部才定义的名字。
+# === LOC / Kyohaku 站点特有工具(已物理迁出到 legacy/site_tools.py)===
+# 仅 import 触发其内部 @legacy_tools_action 注册(默认不注册,需
+# BROWSER_USE_ENABLE_LEGACY_TOOLS=1 才进入 agent 工具目录).必须放在所有
+# tool_actions 导入之后--legacy 模块会 `from tools_registry import record_downloaded_image`
+# 等底部才定义的名字.
 import legacy.site_tools  # noqa: E402,F401

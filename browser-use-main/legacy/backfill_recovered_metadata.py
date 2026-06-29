@@ -80,7 +80,7 @@ def extract_log_metadata(paths: list[Path]) -> dict[int, dict]:
                 match = pattern.search(line)
                 if match:
                     current_sequence = int(match.group(1))
-                    current_file = Path(match.group(2).strip('`"\'，,;；')).name
+                    current_file = Path(match.group(2).strip('`"\',,;;')).name
                     item = by_sequence.setdefault(current_sequence, {'sequence': current_sequence})
                     if current_file:
                         item['file_name'] = current_file
@@ -91,11 +91,11 @@ def extract_log_metadata(paths: list[Path]) -> dict[int, dict]:
 
             image_match = image_url_pattern.search(line)
             if image_match:
-                by_sequence.setdefault(current_sequence, {'sequence': current_sequence})['image_url'] = image_match.group(1).strip('`"\'，,;；')
+                by_sequence.setdefault(current_sequence, {'sequence': current_sequence})['image_url'] = image_match.group(1).strip('`"\',,;;')
 
             page_match = page_url_pattern.search(line)
             if page_match:
-                by_sequence.setdefault(current_sequence, {'sequence': current_sequence})['page_url'] = page_match.group(1).strip('`"\'，,;；')
+                by_sequence.setdefault(current_sequence, {'sequence': current_sequence})['page_url'] = page_match.group(1).strip('`"\',,;;')
 
     return by_sequence
 

@@ -139,32 +139,32 @@ class ScreenshotAction(BaseModel):
 
 
 class SmartScreenshotAction(BaseModel):
-	"""智能截图参数：自动检测并裁剪图片区域"""
+	"""智能截图参数:自动检测并裁剪图片区域"""
 	model_config = ConfigDict(extra='ignore')
 	
 	file_name: str | None = Field(
 		default=None,
-		description='保存的文件名前缀（不含扩展名），默认使用 cropped_image',
+		description='保存的文件名前缀(不含扩展名),默认使用 cropped_image',
 	)
 	
 	target_image_index: int | None = Field(
 		default=None,
-		description='目标图片索引（0-based），None 则裁剪所有检测到的图片',
+		description='目标图片索引(0-based),None 则裁剪所有检测到的图片',
 	)
 	
 	full_page: bool = Field(
 		default=True,
-		description='是否截取完整页面（包括滚动区域）',
+		description='是否截取完整页面(包括滚动区域)',
 	)
 	
 	min_area: int = Field(
 		default=10000,
-		description='最小图片区域面积（像素），用于过滤噪点和小元素',
+		description='最小图片区域面积(像素),用于过滤噪点和小元素',
 	)
 	
 	output_folder: str | None = Field(
 		default=None,
-		description='输出文件夹（相对于 file_system_path），默认当前目录',
+		description='输出文件夹(相对于 file_system_path),默认当前目录',
 	)
 	
 	edge_threshold_low: int = Field(

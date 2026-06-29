@@ -1502,7 +1502,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		"""Lightweight always-on judge that overrides agent success when it overclaims.
 
 		Runs regardless of use_judge setting. Only checks tasks where the agent
-		claimed success — if the agent already reports failure, there's nothing to correct.
+		claimed success - if the agent already reports failure, there's nothing to correct.
 		"""
 		last_result = self.history.history[-1].result[-1]
 		if not last_result.is_done or not last_result.success:
@@ -1536,7 +1536,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 					last_result.extracted_content = note
 		except Exception as e:
 			self.logger.warning(f'Simple judge failed with error: {e}')
-			# Don't override on error — keep the agent's self-report
+			# Don't override on error - keep the agent's self-report
 
 	@observe(ignore_input=True, ignore_output=False)
 	async def _judge_trace(self) -> JudgementResult | None:
@@ -1577,7 +1577,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		"""Run judge evaluation and log the verdict.
 
 		The judge verdict is attached to the action result but does NOT override
-		last_result.success — that stays as the agent's self-report. Telemetry
+		last_result.success - that stays as the agent's self-report. Telemetry
 		sends both values so the eval platform can compare agent vs judge.
 		"""
 		judgement = await self._judge_trace()
@@ -2752,7 +2752,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 
 				# --- Page-change guards (only when more actions remain) ---
 
-				# Layer 1: Static flag — action metadata declares it changes the page
+				# Layer 1: Static flag - action metadata declares it changes the page
 				registered_action = self.tools.registry.registry.actions.get(action_name)
 				if registered_action and registered_action.terminates_sequence:
 					self.logger.info(
@@ -2760,7 +2760,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 					)
 					break
 
-				# Layer 2: Runtime detection — URL or focus target changed
+				# Layer 2: Runtime detection - URL or focus target changed
 				post_action_url = await self.browser_session.get_current_page_url()
 				post_action_focus = self.browser_session.agent_focus_target_id
 

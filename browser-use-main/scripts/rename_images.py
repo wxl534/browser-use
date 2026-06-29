@@ -1,13 +1,13 @@
 """
 图片重命名脚本
 
-功能：
+功能:
 1. 从 title.txt 文件读取标题
 2. 扫描下载目录中的所有图片文件
 3. 按顺序将标题分配给图片
 4. 重命名图片文件为对应的标题
 
-使用方法：
+使用方法:
 python rename_images.py
 """
 
@@ -22,13 +22,13 @@ BASE_DIR = Path(__file__).resolve().parent
 
 def sanitize_filename(filename: str) -> str:
     """
-    清理文件名中的非法字符（Windows 兼容）
+    清理文件名中的非法字符(Windows 兼容)
     """
-    # 先处理换行符（在替换空格之前）
+    # 先处理换行符(在替换空格之前)
     sanitized = filename.replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ')
     
-    # Windows 非法字符：< > : " / \ | ? *（包括全角问号）
-    sanitized = re.sub(r'[<>:"/\\|?？*]', '_', sanitized)
+    # Windows 非法字符:< > : " / \ | ? *(包括全角问号)
+    sanitized = re.sub(r'[<>:"/\\|??*]', '_', sanitized)
     
     # 替换空白字符为下划线
     sanitized = sanitized.replace(' ', '_')
@@ -39,7 +39,7 @@ def sanitize_filename(filename: str) -> str:
     # 移除前后下划线
     sanitized = sanitized.strip('_')
     
-    # 限制长度（Windows 最大 255 字符，留余量给扩展名和冲突后缀）
+    # 限制长度(Windows 最大 255 字符,留余量给扩展名和冲突后缀)
     if len(sanitized) > 200:
         sanitized = sanitized[:200].rstrip('_')
     
@@ -52,13 +52,13 @@ def sanitize_filename(filename: str) -> str:
 
 def get_image_files(directory: Path) -> list[Path]:
     """
-    获取目录中的所有图片文件，按修改时间排序
+    获取目录中的所有图片文件,按修改时间排序
     
     Args:
         directory: 目标目录
         
     Returns:
-        图片文件路径列表（按时间排序）
+        图片文件路径列表(按时间排序)
     """
     image_extensions = {'.jpg', '.jpeg', '.tiff', '.tif', '.png', '.gif', '.webp'}
     
@@ -68,7 +68,7 @@ def get_image_files(directory: Path) -> list[Path]:
         if f.is_file() and f.suffix.lower() in image_extensions
     ]
     
-    # 按修改时间排序（最早的在前）
+    # 按修改时间排序(最早的在前)
     image_files.sort(key=lambda x: x.stat().st_mtime)
     
     return image_files
@@ -76,7 +76,7 @@ def get_image_files(directory: Path) -> list[Path]:
 
 def load_downloaded_records(record_file: Path) -> list[dict]:
     """
-    读取 download_record.jsonl 中真正成功下载的记录。
+    读取 download_record.jsonl 中真正成功下载的记录.
     """
     if not record_file.exists():
         return []
@@ -96,7 +96,7 @@ def load_downloaded_records(record_file: Path) -> list[dict]:
 
 def _record_target_path(download_path: Path, record: dict) -> Path:
     """
-    根据下载记录里的标题生成目标文件路径。
+    根据下载记录里的标题生成目标文件路径.
     """
     file_path = Path(str(record.get('file_path') or ''))
     suffix = file_path.suffix if file_path.suffix.lower() in {'.jpg', '.jpeg', '.tiff', '.tif', '.png', '.gif', '.webp'} else '.png'
@@ -105,11 +105,11 @@ def _record_target_path(download_path: Path, record: dict) -> Path:
 
 def _resolve_record_file(download_path: Path, record: dict, used_paths: set[Path]) -> Path | None:
     """
-    用下载记录精确定位要重命名的文件。
+    用下载记录精确定位要重命名的文件.
 
-    优先级：
+    优先级:
     1. record.file_path 当前仍存在
-    2. 目标标题文件已经存在（说明之前已正确重命名）
+    2. 目标标题文件已经存在(说明之前已正确重命名)
     3. image 目录中同名原始文件仍存在
     4. file_size 唯一匹配
     """
@@ -142,7 +142,7 @@ def _resolve_record_file(download_path: Path, record: dict, used_paths: set[Path
 
 def _rename_with_conflict_handling(source: Path, target: Path) -> tuple[bool, Path, str | None]:
     """
-    重命名文件，自动处理目标文件名冲突；如果已经是目标名则视为成功。
+    重命名文件,自动处理目标文件名冲突;如果已经是目标名则视为成功.
     """
     source = source.resolve()
     target = target.resolve()
@@ -164,7 +164,7 @@ def _rename_with_conflict_handling(source: Path, target: Path) -> tuple[bool, Pa
 
 def _sync_record_file_renames(record_file: Path, download_path: Path, rename_map: list[dict]) -> None:
     """
-    重命名完成后同步结构化记录，避免恢复/校验时还指向 temple_### 临时名。
+    重命名完成后同步结构化记录,避免恢复/校验时还指向 temple_### 临时名.
     """
     if not record_file.exists() or not rename_map:
         return
@@ -222,7 +222,7 @@ def _sync_record_file_renames(record_file: Path, download_path: Path, rename_map
 
 def rename_images_from_records(download_path: Path, record_file: Path) -> tuple[bool, list[dict]]:
     """
-    优先用 download_record.jsonl 精确驱动重命名，避免 title.txt 顺序与文件系统顺序错位。
+    优先用 download_record.jsonl 精确驱动重命名,避免 title.txt 顺序与文件系统顺序错位.
     """
     records = load_downloaded_records(record_file)
     if not records:
@@ -295,7 +295,7 @@ def rename_images_from_records(download_path: Path, record_file: Path) -> tuple[
 
 def find_structured_record_file(agent_data_dir: Path) -> Path:
     """
-    优先使用通用图片记录，再回退到 LOC 下载记录。
+    优先使用通用图片记录,再回退到 LOC 下载记录.
     """
     for filename in ('image_record.jsonl', 'download_record.jsonl'):
         candidate = agent_data_dir / filename
@@ -316,7 +316,7 @@ def extract_content_from_log(log_file: Path, start_keyword: str, end_keyword: st
         end_keyword: 结束关键词 (默认 "END")
         
     Returns:
-        内容列表，如果未找到则返回 None
+        内容列表,如果未找到则返回 None
     """
     if not log_file.exists():
         return None
@@ -348,7 +348,7 @@ def extract_content_from_log(log_file: Path, start_keyword: str, end_keyword: st
         print(f"[警告] 未在日志中找到关键词:{start_keyword}")
         # 尝试在整个内容中搜索 (处理 \n转义的情况)
         if '\\n' in content:
-            print("[信息] 检测到转义换行符，尝试解析...")
+            print("[信息] 检测到转义换行符,尝试解析...")
             # 将 \n替换为实际换行后重新搜索
             normalized_content = content.replace('\\n', '\n')
             norm_lines = normalized_content.split('\n')
@@ -362,7 +362,7 @@ def extract_content_from_log(log_file: Path, start_keyword: str, end_keyword: st
     if not matches:
         return None
     
-    # 使用最后一个（最新的）匹配
+    # 使用最后一个(最新的)匹配
     latest_match = matches[-1]
     print(f"[成功] 找到最新 {start_keyword}（第 {latest_match['line_number']} 行）")
     
@@ -372,7 +372,7 @@ def extract_content_from_log(log_file: Path, start_keyword: str, end_keyword: st
     # 首先尝试从找到的行直接提取 (处理关键词和内容在同一行的情况)
     full_line = latest_match.get('full_line', '')
     
-    # 如果关键词后有内容，提取它
+    # 如果关键词后有内容,提取它
     if start_keyword in full_line:
         after_keyword = full_line.split(start_keyword, 1)[1].strip()
         if after_keyword and after_keyword != end_keyword:
@@ -409,7 +409,7 @@ def extract_content_from_log(log_file: Path, start_keyword: str, end_keyword: st
         if not line:
             continue
         
-        # 移除序号部分（如果有）
+        # 移除序号部分(如果有)
         number_pattern = r'^\s*[\[]?\d+[\]?:?.]\s*'
         content = re.sub(number_pattern, '', line).strip()
         
@@ -423,13 +423,13 @@ def extract_content_from_log(log_file: Path, start_keyword: str, end_keyword: st
 
 def extract_titles_from_log(log_file: Path) -> list[str] | None:
     """
-    从 info.log 文件中提取标题信息（Title.txt: 到 END）
+    从 info.log 文件中提取标题信息(Title.txt: 到 END)
     
     Args:
         log_file: info.log 文件路径
         
     Returns:
-        标题列表，如果未找到则返回 None
+        标题列表,如果未找到则返回 None
     """
     return extract_content_from_log(log_file, "Title.txt:", "END")
 
@@ -450,7 +450,7 @@ def read_file_contents(file_path: Path) -> list[str]:
     with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read()
     
-    # 关键修复：处理转义的 \n 字符
+    # 关键修复:处理转义的 \n 字符
     # LLM 输出的可能是字面量 \n 而非真正换行
     if '\\n' in content:
         content = content.replace('\\n', '\n')
@@ -458,12 +458,12 @@ def read_file_contents(file_path: Path) -> list[str]:
     # 按行分割
     lines = content.split('\n')
     
-    # 清理每行的空白字符，过滤空行和 END 标记
+    # 清理每行的空白字符,过滤空行和 END 标记
     contents = []
     for line in lines:
         line = line.strip()
         if line and line != 'END':
-            # 移除序号（如 "1. " 或 "[1]:"）
+            # 移除序号(如 "1. " 或 "[1]:")
             number_pattern = r'^\s*[\[]?\d+[\]?:?.]\s*'
             clean_line = re.sub(number_pattern, '', line).strip()
             if clean_line:
@@ -496,7 +496,7 @@ def rename_images(
         print(f"[错误] 目录不存在：{download_path}")
         return False
 
-    # 1. 优先使用结构化下载记录精确重命名，避免 title.txt 顺序与实际文件错位。
+    # 1. 优先使用结构化下载记录精确重命名,避免 title.txt 顺序与实际文件错位.
     used_record_mode, record_rename_map = rename_images_from_records(download_path, records_path)
     if record_rename_map:
         record_file_path = download_path / 'rename_record.txt'
@@ -515,7 +515,7 @@ def rename_images(
         print(f"[信息] 重命名记录已保存到：{record_file_path}")
         return used_record_mode
     
-    # 2. 兼容旧流程：没有结构化记录时，才从 title.txt 顺序重命名。
+    # 2. 兼容旧流程:没有结构化记录时,才从 title.txt 顺序重命名.
     titles = read_file_contents(titles_path)
     if not titles:
         print(f"\n[警告] 标题文件为空或不存在：{titles_path}")
@@ -533,7 +533,7 @@ def rename_images(
     
     # 8. 检查数量是否匹配
     if not titles:
-        print("[错误] 未找到标题信息，无法执行重命名")
+        print("[错误] 未找到标题信息,无法执行重命名")
         return False
     
     if len(titles) != len(image_files):
@@ -552,7 +552,7 @@ def rename_images(
         old_name = img_file.name
         sanitized_title = sanitize_filename(title)
         
-        # 生成新文件名（保留原扩展名）
+        # 生成新文件名(保留原扩展名)
         new_name = f"{sanitized_title}{img_file.suffix}"
         new_path = img_file.parent / new_name
         
@@ -603,6 +603,6 @@ if __name__ == "__main__":
     success = rename_images()
     
     if success:
-        print("\n[成功] 重命名任务完成！")
+        print("\n[成功] 重命名任务完成!")
     else:
         print("\n[错误] 重命名任务失败或无需执行")

@@ -1,13 +1,13 @@
-"""IDP 爬虫 Web 控制台后端（FastAPI）。
+"""IDP 爬虫 Web 控制台后端(FastAPI).
 
-提供：
-- 只读数据 API：统计、图片分页/搜索、图片文件、运行历史、断点进度、最终报告
-- 控制 API：启动 / 停止 supervisor，查询运行状态
-- 实时日志：SSE 推流 + 最近日志快照
-- 生产模式：托管 vite 构建出的前端静态文件
+提供:
+- 只读数据 API:统计,图片分页/搜索,图片文件,运行历史,断点进度,最终报告
+- 控制 API:启动 / 停止 supervisor,查询运行状态
+- 实时日志:SSE 推流 + 最近日志快照
+- 生产模式:托管 vite 构建出的前端静态文件
 
-开发模式下前端用 vite dev server（:5173）反向代理 /api 到本服务（:8000），
-所以这里开启 CORS 方便本地联调。
+开发模式下前端用 vite dev server(:5173)反向代理 /api 到本服务(:8000),
+所以这里开启 CORS 方便本地联调.
 """
 from __future__ import annotations
 
@@ -118,7 +118,7 @@ async def api_logs_stream(request: Request) -> StreamingResponse:
     async def event_gen():
         q = await manager.subscribe()
         try:
-            # 先把最近若干行作为初始快照推过去，避免新连接看到空白。
+            # 先把最近若干行作为初始快照推过去,避免新连接看到空白.
             for line in manager.recent_log(200):
                 yield _sse(line)
             while True:
@@ -156,12 +156,12 @@ async def api_health() -> dict[str, Any]:
 
 # ---------- 生产模式静态托管 ----------
 if paths.FRONTEND_DIST.exists():
-    # 资源文件（assets/ 等）直接由 StaticFiles 提供。
+    # 资源文件(assets/ 等)直接由 StaticFiles 提供.
     app.mount('/assets', StaticFiles(directory=str(paths.FRONTEND_DIST / 'assets')), name='assets')
 
     @app.get('/{full_path:path}')
     async def spa_fallback(full_path: str):
-        # 非 /api 的任意前端路由都回退到 index.html，支持 SPA 深链刷新。
+        # 非 /api 的任意前端路由都回退到 index.html,支持 SPA 深链刷新.
         candidate = (paths.FRONTEND_DIST / full_path).resolve()
         dist_root = paths.FRONTEND_DIST.resolve()
         if full_path and dist_root in candidate.parents and candidate.is_file():

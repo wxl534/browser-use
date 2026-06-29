@@ -1,7 +1,7 @@
 """
 Run browser-use repeatedly until ImagesCache reaches the target in task.md.
 
-This supervisor intentionally starts main.py as a fresh subprocess each round.
+This supervisor intentionally starts worker.py as a fresh subprocess each round.
 That gives every retry a clean Python/browser process while preserving checkpoint
 state in Images/ImagesCache.
 """
@@ -19,28 +19,37 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'core'))
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'scripts'))
+
 from configure_resume_target import DEFAULT_CACHE_DIR, TASK_FILE, configure_target, detect_task_target
 from idp_page_progress import select_next_page
+from cache_layout import cache_has_content, cache_is_locked, process_is_running
+from task_parse import detect_search_keyword, keyword_changed, title_prefix_from_keyword
 
 
 BASE_DIR = Path(__file__).resolve().parent
 
-# main.py 用退出码 3 表示 LLM 端点被网关/门户拦截（致命、不可重试）。
+# worker.py 用退出码 3 表示 LLM 端点被网关/门户拦截(致命,不可重试).
 LLM_BLOCKED_EXIT_CODE = 3
+
+# 单次运行开关:改为 1 则只跑一轮 worker.py 后立即停止(无论是否达标);
+# 默认 0 表示持续重跑直到 task.md 目标达成.仅供运行前手动改源码使用.
+RUN_ONCE = 0
 
 
 def terminate_process_tree(process: subprocess.Popen, *, grace_seconds: float = 5.0) -> None:
-    """终止子进程及其全部后代（如 main.py 启动的 Chromium）。
+    """终止子进程及其全部后代(如 main.py 启动的 Chromium).
 
-    仅 process.terminate() 在 Windows 上只杀 main.py，会留下孤儿 Chrome 占住
-    browser_profile 锁，导致下一轮起不来。这里优先用 psutil 递归清理，
-    失败时回退到 Windows 的 `taskkill /T /F /PID` 或 POSIX 的进程组信号。
+    仅 process.terminate() 在 Windows 上只杀 main.py,会留下孤儿 Chrome 占住
+    browser_profile 锁,导致下一轮起不来.这里优先用 psutil 递归清理,
+    失败时回退到 Windows 的 `taskkill /T /F /PID` 或 POSIX 的进程组信号.
     """
     if process.poll() is not None:
         return
     pid = process.pid
 
-    # 首选：psutil 递归终止（browser-use 运行时本就依赖 psutil，跨平台最稳）。
+    # 首选:psutil 递归终止(browser-use 运行时本就依赖 psutil,跨平台最稳).
     try:
         import psutil  # type: ignore
 
@@ -65,7 +74,7 @@ def terminate_process_tree(process: subprocess.Popen, *, grace_seconds: float = 
     except Exception:
         pass
 
-    # 回退：按平台杀进程树。
+    # 回退:按平台杀进程树.
     try:
         if os.name == 'nt':
             subprocess.run(
@@ -85,7 +94,7 @@ def terminate_process_tree(process: subprocess.Popen, *, grace_seconds: float = 
             except ProcessLookupError:
                 pass
     except Exception:
-        # 最后兜底：至少杀掉直接子进程。
+        # 最后兜底:至少杀掉直接子进程.
         try:
             process.kill()
         except Exception:
@@ -93,7 +102,7 @@ def terminate_process_tree(process: subprocess.Popen, *, grace_seconds: float = 
 
 
 def _interruptible_sleep(seconds: float, stop_event: threading.Event) -> None:
-    """可被退出事件打断的睡眠，避免长冷却期间无法响应 q 退出。"""
+    """可被退出事件打断的睡眠,避免长冷却期间无法响应 q 退出."""
     end = time.monotonic() + max(0.0, seconds)
     while time.monotonic() < end:
         if stop_event.is_set():
@@ -108,51 +117,13 @@ def yes_or_no(prompt: str) -> bool:
             return True
         if answer in {'n', 'no', '否', ''}:
             return False
-        print('请输入 y 或 n。')
-
-
-def title_prefix_from_keyword(keyword: str) -> str:
-    import re
-    return re.sub(r'[^0-9A-Za-z]+', '_', keyword.lower()).strip('_') or 'idp_image'
-
-
-def keyword_changed(old_keyword: str, new_keyword: str) -> bool:
-    return title_prefix_from_keyword(old_keyword) != title_prefix_from_keyword(new_keyword)
-
-
-def process_is_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
-def cache_is_locked(cache_dir: Path) -> bool:
-    lock_file = cache_dir / 'run.lock'
-    if not lock_file.exists():
-        return False
-    try:
-        lock = json.loads(lock_file.read_text(encoding='utf-8'))
-    except json.JSONDecodeError:
-        return False
-    try:
-        pid = int(lock.get('pid') or 0)
-    except (TypeError, ValueError):
-        return False
-    return process_is_running(pid)
-
-
-def cache_has_content(cache_dir: Path) -> bool:
-    return cache_dir.exists() and any(cache_dir.iterdir())
+        print('请输入 y 或 n.')
 
 
 def clear_stale_run_lock(cache_dir: Path) -> bool:
-    """轮次之间 supervisor 独占 cache_dir，此时残留的 run.lock 一定是上一轮（可能被硬杀）遗留的。
-    若其 PID 已不存在则删除，避免 PID 复用导致 main.py 误判 cache_is_locked 而下到 ImagesCache_xx，
-    与 supervisor 读取的目录产生分叉、虚报 0 进度。"""
+    """轮次之间 supervisor 独占 cache_dir,此时残留的 run.lock 一定是上一轮(可能被硬杀)遗留的.
+    若其 PID 已不存在则删除,避免 PID 复用导致 main.py 误判 cache_is_locked 而下到 ImagesCache_xx,
+    与 supervisor 读取的目录产生分叉,虚报 0 进度."""
     lock_file = cache_dir / 'run.lock'
     if not lock_file.exists():
         return False
@@ -203,28 +174,12 @@ def archive_cache_for_keyword_change(cache_dir: Path, old_keyword: str, new_keyw
     return summary
 
 
-def detect_search_keyword(task_text: str, default: str = 'china buddhist') -> str:
-    import re
-    patterns = [
-        r'搜索关键词\s*\*\*`([^`]+)`\*\*',
-        r'搜索关键词固定为\s*`([^`]+)`',
-        r'关键词\s*`([^`]+)`',
-        r'keyword="([^"]+)"',
-        r"keyword='([^']+)'",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, task_text, re.IGNORECASE)
-        if match and match.group(1).strip():
-            return re.sub(r'\s+', ' ', match.group(1)).strip()
-    return default
-
-
 def _replace_whole_word(text: str, old: str, new: str) -> str:
-    """只替换作为完整词出现的 old，避免把 old 当子串误伤其它单词。
+    """只替换作为完整词出现的 old,避免把 old 当子串误伤其它单词.
 
-    例如 old='si'、new='miao' 时，绝不能把 'session' 改成 'sesmiaoon'。
-    用词边界 \\b 包裹 old；若 old 含正则元字符或非词字符（如短语、含空格），
-    则退回到带边界断言的转义匹配。
+    例如 old='si',new='miao' 时,绝不能把 'session' 改成 'sesmiaoon'.
+    用词边界 \\b 包裹 old;若 old 含正则元字符或非词字符(如短语,含空格),
+    则退回到带边界断言的转义匹配.
     """
     import re
     if not old or old == new:
@@ -359,8 +314,8 @@ def sync_progress_from_page_queue(
 
 
 def apply_keyword_change(cache_dir: Path, new_keyword: str) -> dict | None:
-    """非交互地把搜索词切换为 new_keyword：归档旧缓存、改写 task.md、更新缓存内关键词。
-    若关键词未变化则返回 None（不做任何破坏性操作）。"""
+    """非交互地把搜索词切换为 new_keyword:归档旧缓存,改写 task.md,更新缓存内关键词.
+    若关键词未变化则返回 None(不做任何破坏性操作)."""
     new_keyword = (new_keyword or '').strip()
     if not new_keyword:
         raise ValueError('搜索词不能为空')
@@ -391,7 +346,7 @@ def configure_before_run(
 
     import render_task
 
-    # 非交互模式：由 GUI/脚本通过任一任务参数传入，或在没有 TTY 时不再阻塞 input()。
+    # 非交互模式:由 GUI/脚本通过任一任务参数传入,或在没有 TTY 时不再阻塞 input().
     non_interactive = (
         any(value is not None for value in (
             keyword_override, target_override, site_override, allowed_hosts_override,
@@ -401,8 +356,8 @@ def configure_before_run(
     )
 
     cfg = render_task.load_config()
-    # 与现有 task.md 保持连续：未显式覆盖时，沿用 task.md 当前的关键词/目标，
-    # 避免渲染把运行中途改过的值重置回 task_config.json 旧值。
+    # 与现有 task.md 保持连续:未显式覆盖时,沿用 task.md 当前的关键词/目标,
+    # 避免渲染把运行中途改过的值重置回 task_config.json 旧值.
     if TASK_FILE.exists():
         task_text = TASK_FILE.read_text(encoding='utf-8')
         current_keyword = detect_search_keyword(task_text)
@@ -412,9 +367,9 @@ def configure_before_run(
         if target_override is None and current_target:
             cfg['target_count'] = current_target
 
-    # 搜索词：变更则归档旧缓存 + 更新缓存内关键词（task.md 最终由渲染器统一写）。
+    # 搜索词:变更则归档旧缓存 + 更新缓存内关键词(task.md 最终由渲染器统一写).
     new_keyword = keyword_override
-    if new_keyword is None and not non_interactive and yes_or_no('是否要修改搜索词？[y/N]: '):
+    if new_keyword is None and not non_interactive and yes_or_no('是否要修改搜索词?[y/N]: '):
         new_keyword = input('请输入新的搜索词: ').strip()
     if new_keyword:
         new_keyword = re.sub(r'\s+', ' ', new_keyword).strip()
@@ -424,16 +379,16 @@ def configure_before_run(
             update_cache_keyword(cache_dir, new_keyword)
         cfg['keyword'] = new_keyword
 
-    # 目标值：更新缓存断点状态（idp_progress / run_config）；task.md 由渲染器统一写。
+    # 目标值:更新缓存断点状态(idp_progress / run_config);task.md 由渲染器统一写.
     new_target = target_override
-    if new_target is None and not non_interactive and yes_or_no('是否要修改目标下载数量？[y/N]: '):
+    if new_target is None and not non_interactive and yes_or_no('是否要修改目标下载数量?[y/N]: '):
         new_target = int(input('请输入新的目标总下载数量: ').strip())
     if new_target is not None:
         summary = configure_target(cache_dir, int(new_target), update_task=False)
         print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
         cfg['target_count'] = int(new_target)
 
-    # 其它任务参数（站点 / 白名单 / 模式 / item 选择器 / force_generic）。
+    # 其它任务参数(站点 / 白名单 / 模式 / item 选择器 / force_generic).
     if site_override is not None:
         cfg['site_url'] = site_override
     if allowed_hosts_override is not None:
@@ -445,7 +400,7 @@ def configure_before_run(
     if force_generic_override is not None:
         cfg['force_generic'] = bool(force_generic_override)
 
-    # 单一真相源写回 + 权威渲染 task.md（task.md 不再手改）。
+    # 单一真相源写回 + 权威渲染 task.md(task.md 不再手改).
     cfg = render_task.normalize_config(cfg)
     render_task.save_config(cfg)
     render_task.render_to_task(cfg)
@@ -456,9 +411,9 @@ def configure_before_run(
         print('♻️ 已通过参数选择断点续跑' if resume_choice else '🆕 已通过参数选择从头开始')
         return resume_choice
     if non_interactive:
-        # 没有显式 --resume/--new-run 时，非交互默认从头开始，避免阻塞在 input()。
+        # 没有显式 --resume/--new-run 时,非交互默认从头开始,避免阻塞在 input().
         return False
-    return yes_or_no('是否从上次断点续跑？[y/N]: ')
+    return yes_or_no('是否从上次断点续跑?[y/N]: ')
 
 
 def start_quit_listener(stop_event: threading.Event) -> threading.Thread:
@@ -467,7 +422,7 @@ def start_quit_listener(stop_event: threading.Event) -> threading.Thread:
     while supervised so this is the single owner of terminal input.
     """
     def listen() -> None:
-        print("\n💡 自动运行中输入 'quit' 并回车可停止当前轮并退出自动重启。\n", flush=True)
+        print("\n💡 自动运行中输入 'quit' 并回车可停止当前轮并退出自动重启.\n", flush=True)
         while not stop_event.is_set():
             try:
                 line = sys.stdin.readline()
@@ -476,7 +431,7 @@ def start_quit_listener(stop_event: threading.Event) -> threading.Thread:
             if not line:
                 return
             if line.strip().lower() == 'quit':
-                print("\n⚠️ 收到 quit，正在停止当前 main.py 子进程并退出自动运行...\n", flush=True)
+                print("\n⚠️ 收到 quit,正在停止当前 main.py 子进程并退出自动运行...\n", flush=True)
                 stop_event.set()
                 return
 
@@ -553,7 +508,7 @@ def run_main_subprocess(
         'BROWSER_USE_DISABLE_INPUT_MONITOR': '1',
         'PYTHONIOENCODING': 'utf-8',
     }
-    # POSIX 下新建会话，使整个子进程树共享进程组，便于 os.killpg 兜底清理。
+    # POSIX 下新建会话,使整个子进程树共享进程组,便于 os.killpg 兜底清理.
     popen_kwargs: dict = {}
     if os.name != 'nt':
         popen_kwargs['start_new_session'] = True
@@ -564,7 +519,7 @@ def run_main_subprocess(
         log.write(start_line + '\n')
         log.flush()
         process = subprocess.Popen(
-            [sys.executable, str(BASE_DIR / 'main.py')],
+            [sys.executable, str(BASE_DIR / 'worker.py')],
             cwd=str(BASE_DIR),
             env=env,
             stdout=subprocess.PIPE,
@@ -576,12 +531,12 @@ def run_main_subprocess(
             **popen_kwargs,
         )
 
-        # 进程退出后用于停掉两个看门狗线程，避免它们空转。
+        # 进程退出后用于停掉两个看门狗线程,避免它们空转.
         finished_event = threading.Event()
         timed_out = threading.Event()
 
         def stop_child_on_quit() -> None:
-            # 等待用户 quit 或进程自然结束，二者先到先停。
+            # 等待用户 quit 或进程自然结束,二者先到先停.
             while not finished_event.is_set():
                 if stop_event.wait(timeout=0.5):
                     if process.poll() is None:
@@ -613,7 +568,7 @@ def run_main_subprocess(
                 terminate_process_tree(process)
         returncode = process.wait()
         finished_event.set()  # 通知看门狗线程退出
-        # 进程退出后，确保没有残留的孤儿子进程（Chromium）继续占用 profile 锁。
+        # 进程退出后,确保没有残留的孤儿子进程(Chromium)继续占用 profile 锁.
         terminate_process_tree(process)
         status = 'timeout' if timed_out.is_set() else str(returncode)
         end_line = f'\n=== auto round {round_number} exited {status} {datetime.now(timezone.utc).isoformat()} ==='
@@ -627,21 +582,21 @@ def run_main_subprocess(
     return int(returncode)
 
 
-# === 方案C：自动刷新 Cloudflare 通行证（cf_clearance）===
-# 由 fetch_cf_cookie.py（在隔离的 Scrapling 解释器里）取证，产出 storage_state JSON，
-# 通过 IDP_STORAGE_STATE 透传给 main.py 子进程注入。整套功能完全可选：未配置
-# IDP_SCRAPLING_PYTHON 时静默关闭，不影响原有行为。
+# === 方案C:自动刷新 Cloudflare 通行证(cf_clearance)===
+# 由 fetch_cf_cookie.py(在隔离的 Scrapling 解释器里)取证,产出 storage_state JSON,
+# 通过 IDP_STORAGE_STATE 透传给 main.py 子进程注入.整套功能完全可选:未配置
+# IDP_SCRAPLING_PYTHON 时静默关闭,不影响原有行为.
 CF_REFRESH_MARGIN_SECONDS = 180  # cf_clearance 距过期不足该秒数即视为需要刷新
 
 
 def _storage_state_path() -> Path:
-    """storage_state 输出/读取路径（默认脚本目录下 cf_storage.json，相对脚本位置）。"""
+    """storage_state 输出/读取路径(默认脚本目录下 cf_storage.json,相对脚本位置)."""
     configured = os.environ.get('IDP_STORAGE_STATE', '').strip()
     return Path(configured) if configured else (BASE_DIR / 'cf_storage.json')
 
 
 def _scrapling_python() -> str | None:
-    """返回可用于运行 fetch_cf_cookie.py 的 Scrapling 解释器路径；未配置/不存在则 None。"""
+    """返回可用于运行 fetch_cf_cookie.py 的 Scrapling 解释器路径;未配置/不存在则 None."""
     configured = os.environ.get('IDP_SCRAPLING_PYTHON', '').strip()
     if not configured:
         return None
@@ -652,7 +607,7 @@ def _scrapling_python() -> str | None:
 
 
 def _cf_cookie_fresh(path: Path, margin: int = CF_REFRESH_MARGIN_SECONDS) -> bool:
-    """判断现有 storage_state 是否仍持有未临近过期的 cf_clearance。"""
+    """判断现有 storage_state 是否仍持有未临近过期的 cf_clearance."""
     if not path.exists():
         return False
     try:
@@ -664,20 +619,20 @@ def _cf_cookie_fresh(path: Path, margin: int = CF_REFRESH_MARGIN_SECONDS) -> boo
         return False
     expires = meta.get('cf_clearance_expires')
     if not isinstance(expires, (int, float)) or expires <= 0:
-        # 无过期信息时保守地认为新鲜（避免每轮都刷），靠 force 刷新兜底。
+        # 无过期信息时保守地认为新鲜(避免每轮都刷),靠 force 刷新兜底.
         return True
     return time.time() < (expires - margin)
 
 
 def ensure_cf_cookie(stop_event: threading.Event, *, force: bool = False, reason: str = '') -> None:
-    """确保 storage_state 持有有效 cf_clearance；过期/缺失或 force 时调用取证脚本刷新。
+    """确保 storage_state 持有有效 cf_clearance;过期/缺失或 force 时调用取证脚本刷新.
 
-    取证脚本继承当前进程的环境变量（含 IDP_PROXY_* / IDP_CF_URL / IDP_STORAGE_STATE），
-    因此取证与 browser-use 共用同一代理 / 出口 IP —— 这是 cf_clearance 生效的前提。
+    取证脚本继承当前进程的环境变量(含 IDP_PROXY_* / IDP_CF_URL / IDP_STORAGE_STATE),
+    因此取证与 browser-use 共用同一代理 / 出口 IP -- 这是 cf_clearance 生效的前提.
     """
     python = _scrapling_python()
     if python is None:
-        return  # 功能未启用，静默跳过
+        return  # 功能未启用,静默跳过
     if stop_event.is_set():
         return
     path = _storage_state_path()
@@ -695,7 +650,7 @@ def ensure_cf_cookie(stop_event: threading.Event, *, force: bool = False, reason
             timeout=int(os.environ.get('IDP_CF_FETCH_TIMEOUT', '300')),
         )
     except subprocess.TimeoutExpired:
-        print("⚠️ cf_clearance 取证超时，本轮沿用现有 cookie（若有）。", flush=True)
+        print("⚠️ cf_clearance 取证超时,本轮沿用现有 cookie(若有).", flush=True)
         return
     except Exception as exc:  # noqa: BLE001
         print(f"⚠️ cf_clearance 取证调用失败：{type(exc).__name__}: {exc}", flush=True)
@@ -703,7 +658,7 @@ def ensure_cf_cookie(stop_event: threading.Event, *, force: bool = False, reason
     if proc.returncode == 0:
         print(f"✅ cf_clearance 已刷新 → {path}", flush=True)
     elif proc.returncode == 2:
-        print("⚠️ 取证完成但未获 cf_clearance（可能本就放行，或 IP 信誉被挡需换住宅代理）。", flush=True)
+        print("⚠️ 取证完成但未获 cf_clearance(可能本就放行,或 IP 信誉被挡需换住宅代理).", flush=True)
     else:
         print(f"⚠️ 取证脚本返回码 {proc.returncode}，本轮沿用现有 cookie（若有）。", flush=True)
 
@@ -736,8 +691,8 @@ def auto_run_until_target(
     no_progress_rounds = 0
     history: list[dict] = []
 
-    # 方案C：若启用了 Scrapling 取证（设了 IDP_SCRAPLING_PYTHON），让 main.py 子进程
-    # 读到 storage_state 路径，并在开跑前预取一次 cf_clearance 通行证。
+    # 方案C:若启用了 Scrapling 取证(设了 IDP_SCRAPLING_PYTHON),让 main.py 子进程
+    # 读到 storage_state 路径,并在开跑前预取一次 cf_clearance 通行证.
     if _scrapling_python() is not None:
         os.environ['IDP_STORAGE_STATE'] = str(_storage_state_path())
         ensure_cf_cookie(stop_event, reason='启动前预取')
@@ -746,7 +701,7 @@ def auto_run_until_target(
         if stop_event.is_set():
             break
         if clear_stale_run_lock(cache_dir):
-            print("🧹 已清理上一轮遗留的 run.lock（PID 已退出）", flush=True)
+            print("🧹 已清理上一轮遗留的 run.lock(PID 已退出)", flush=True)
         target = read_target_from_task()
         before = read_downloaded_count(cache_dir)
         if before >= target:
@@ -770,9 +725,9 @@ def auto_run_until_target(
             )
             print(f"📌 页面队列选择续跑点: page={active_page['page']}, index={active_page['next_index']}", flush=True)
         else:
-            print("🆕 本轮选择从头开始，不读取或同步续跑点", flush=True)
+            print("🆕 本轮选择从头开始,不读取或同步续跑点", flush=True)
 
-        # 方案C：跑前确保通行证新鲜（过期/缺失才会真正去刷，否则秒返回）。
+        # 方案C:跑前确保通行证新鲜(过期/缺失才会真正去刷,否则秒返回).
         ensure_cf_cookie(stop_event, reason=f'第{round_number}轮跑前检查')
 
         returncode = run_main_subprocess(
@@ -780,8 +735,8 @@ def auto_run_until_target(
         )
         if returncode == LLM_BLOCKED_EXIT_CODE:
             print(
-                '🛑 子进程报告 LLM 端点被拦截（退出码 3），停止自动重试。'
-                '请连接校园网/VPN 或检查 OPENAI_API_KEY / OPENAI_BASE_URL 后重新运行。',
+                '🛑 子进程报告 LLM 端点被拦截(退出码 3),停止自动重试.'
+                '请连接校园网/VPN 或检查 OPENAI_API_KEY / OPENAI_BASE_URL 后重新运行.',
                 flush=True,
             )
             history.append({
@@ -813,6 +768,9 @@ def auto_run_until_target(
 
         if after >= target:
             break
+        if RUN_ONCE:
+            print("🔂 RUN_ONCE=1:已完成单次运行,按设置停止(不再继续重跑)", flush=True)
+            break
         if stop_event.is_set():
             break
         if delta <= 0:
@@ -821,8 +779,8 @@ def auto_run_until_target(
             no_progress_rounds = 0
         if no_progress_rounds >= max_no_progress_rounds:
             break
-        # 自适应冷却：本轮无新增通常意味着被 Cloudflare 限流，递增退避等待限流窗口恢复；
-        # 有新增时只做正常的轻量间隔。
+        # 自适应冷却:本轮无新增通常意味着被 Cloudflare 限流,递增退避等待限流窗口恢复;
+        # 有新增时只做正常的轻量间隔.
         if no_progress_rounds > 0 and cooldown_seconds > 0:
             cooldown = min(cooldown_seconds * (2 ** (no_progress_rounds - 1)), cooldown_max_seconds)
             print(
@@ -830,8 +788,8 @@ def auto_run_until_target(
                 f"让限流窗口恢复后再续跑…（连续无进展 {no_progress_rounds}/{max_no_progress_rounds}）",
                 flush=True,
             )
-            # 方案C：无新增多半是 cf_clearance 失效或本会话被挑战，强制重新取证一张通行证。
-            ensure_cf_cookie(stop_event, force=True, reason='疑似被限流，强制刷新通行证')
+            # 方案C:无新增多半是 cf_clearance 失效或本会话被挑战,强制重新取证一张通行证.
+            ensure_cf_cookie(stop_event, force=True, reason='疑似被限流,强制刷新通行证')
             _interruptible_sleep(cooldown, stop_event)
         elif sleep_seconds > 0:
             _interruptible_sleep(sleep_seconds, stop_event)
@@ -859,16 +817,16 @@ def auto_run_until_target(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Auto-run main.py until task.md target is reached.')
     parser.add_argument('--cache-dir', type=Path, default=DEFAULT_CACHE_DIR)
-    parser.add_argument('--keyword', type=str, default=None, help='非交互地设置搜索词；与当前不同则归档旧缓存并改写 task.md')
+    parser.add_argument('--keyword', type=str, default=None, help='非交互地设置搜索词;与当前不同则归档旧缓存并改写 task.md')
     parser.add_argument('--target', type=int, default=None, help='非交互地设置目标下载总数并写入 task.md')
-    parser.add_argument('--site', type=str, default=None, help='目标站点首页 URL（写入 task_config.json 并渲染 task.md）')
-    parser.add_argument('--allowed-hosts', type=str, default=None, help='允许下载的域名后缀白名单，逗号分隔')
+    parser.add_argument('--site', type=str, default=None, help='目标站点首页 URL(写入 task_config.json 并渲染 task.md)')
+    parser.add_argument('--allowed-hosts', type=str, default=None, help='允许下载的域名后缀白名单,逗号分隔')
     parser.add_argument('--mode', choices=('idp_batch', 'generic_per_item'), default=None,
-                        help='任务模式：idp_batch（站点专属批量）| generic_per_item（任意站点逐 item 稳定路径）')
-    parser.add_argument('--item-selector', type=str, default=None, help='非注册站点的 item 详情链接 CSS 选择器（generic 模式）')
+                        help='任务模式:idp_batch(站点专属批量)| generic_per_item(任意站点逐 item 稳定路径)')
+    parser.add_argument('--item-selector', type=str, default=None, help='非注册站点的 item 详情链接 CSS 选择器(generic 模式)')
     fg = parser.add_mutually_exclusive_group()
     fg.add_argument('--force-generic', dest='force_generic', action='store_true', default=None,
-                    help='通用下载跳过站点专属 manifest 加速（稳定优先）')
+                    help='通用下载跳过站点专属 manifest 加速(稳定优先)')
     fg.add_argument('--no-force-generic', dest='force_generic', action='store_false', default=None,
                     help='关闭 force_generic')
     parser.add_argument('--max-rounds', type=int, default=100)
@@ -878,7 +836,7 @@ def parse_args() -> argparse.Namespace:
         '--cooldown-seconds',
         type=int,
         default=int(os.environ.get('BROWSER_USE_COOLDOWN_SECONDS', '60')),
-        help='某一轮无新增（疑似被反爬限流）时的基础冷却秒数，按连续无进展轮次指数递增；<=0 表示沿用 --sleep-seconds',
+        help='某一轮无新增(疑似被反爬限流)时的基础冷却秒数,按连续无进展轮次指数递增;<=0 表示沿用 --sleep-seconds',
     )
     parser.add_argument(
         '--cooldown-max-seconds',
@@ -890,7 +848,7 @@ def parse_args() -> argparse.Namespace:
         '--page-delay-seconds',
         type=float,
         default=float(os.environ.get('BROWSER_USE_PAGE_DELAY_SECONDS', '12')),
-        help='每页批量下载前的节流延时秒数，降低触发 Cloudflare 限流概率；传给子进程的 BROWSER_USE_PAGE_DELAY_SECONDS（默认 12）',
+        help='每页批量下载前的节流延时秒数,降低触发 Cloudflare 限流概率;传给子进程的 BROWSER_USE_PAGE_DELAY_SECONDS(默认 12)',
     )
     parser.add_argument('--max-reasonable-page', type=int, default=200, help='超过该页码的断点会被视为异常跳页')
     parser.add_argument('--fallback-page', type=int, default=1, help='发现异常跳页且没有可靠续跑点时从该页重新开始')
@@ -898,53 +856,53 @@ def parse_args() -> argparse.Namespace:
         '--round-timeout',
         type=int,
         default=int(os.environ.get('BROWSER_USE_ROUND_TIMEOUT', '0')),
-        help='单轮 main.py 的最长运行秒数，超时判定卡死并清理进程树；<=0 表示不限制',
+        help='单轮 main.py 的最长运行秒数,超时判定卡死并清理进程树;<=0 表示不限制',
     )
-    # === 反爬：真实 Chrome profile + 可选代理（绕过 Cloudflare 人机验证）===
-    # Cloudflare Turnstile 主要按后台指纹 + IP 信誉判定，而非"点击复选框"本身。
-    # 用带真实 cookie/cf_clearance 的 Chrome profile 出场可让目标站静默放行。
+    # === 反爬:真实 Chrome profile + 可选代理(绕过 Cloudflare 人机验证)===
+    # Cloudflare Turnstile 主要按后台指纹 + IP 信誉判定,而非"点击复选框"本身.
+    # 用带真实 cookie/cf_clearance 的 Chrome profile 出场可让目标站静默放行.
     parser.add_argument(
         '--chrome-executable',
         type=str,
         default=os.environ.get('IDP_CHROME_EXECUTABLE', ''),
-        help='真实 Chrome 可执行文件路径（与 --chrome-user-data-dir 同时设置才启用真实 Chrome）',
+        help='真实 Chrome 可执行文件路径(与 --chrome-user-data-dir 同时设置才启用真实 Chrome)',
     )
     parser.add_argument(
         '--chrome-user-data-dir',
         type=str,
         default=os.environ.get('IDP_CHROME_USER_DATA_DIR', ''),
-        help='真实 Chrome 用户数据目录（须先完全关闭该 Chrome，避免 profile 被占用）',
+        help='真实 Chrome 用户数据目录(须先完全关闭该 Chrome,避免 profile 被占用)',
     )
     parser.add_argument(
         '--chrome-profile-directory',
         type=str,
         default=os.environ.get('IDP_CHROME_PROFILE_DIRECTORY', 'Default'),
-        help="Chrome profile 子目录名（默认 'Default'）",
+        help="Chrome profile 子目录名(默认 'Default')",
     )
     parser.add_argument(
         '--proxy-server',
         type=str,
         default=os.environ.get('IDP_PROXY_SERVER', ''),
-        help='可选代理服务器，如 http://user:pass@host:port（攻击 Cloudflare 的 IP 信誉层）',
+        help='可选代理服务器,如 http://user:pass@host:port(攻击 Cloudflare 的 IP 信誉层)',
     )
-    # === 方案C：用 Scrapling 自动取 cf_clearance 通行证并注入 ===
+    # === 方案C:用 Scrapling 自动取 cf_clearance 通行证并注入 ===
     parser.add_argument(
         '--scrapling-python',
         type=str,
         default=os.environ.get('IDP_SCRAPLING_PYTHON', ''),
-        help='安装了 scrapling[fetchers] 的解释器路径；设置后启用自动取证/刷新 cf_clearance（不设则关闭）',
+        help='安装了 scrapling[fetchers] 的解释器路径;设置后启用自动取证/刷新 cf_clearance(不设则关闭)',
     )
     parser.add_argument(
         '--cf-url',
         type=str,
         default=os.environ.get('IDP_CF_URL', ''),
-        help='取 cf_clearance 的目标 URL（默认目标站首页，由 fetch_cf_cookie.py 兜底）',
+        help='取 cf_clearance 的目标 URL(默认目标站首页,由 fetch_cf_cookie.py 兜底)',
     )
     parser.add_argument(
         '--storage-state',
         type=str,
         default=os.environ.get('IDP_STORAGE_STATE', ''),
-        help='storage_state JSON 路径（取证输出 + main.py 注入；默认脚本目录下 cf_storage.json）',
+        help='storage_state JSON 路径(取证输出 + main.py 注入;默认脚本目录下 cf_storage.json)',
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--resume', action='store_true', help='第一轮从上次断点续跑')
@@ -955,10 +913,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     resume_choice = True if args.resume else False if args.new_run else None
-    # 让每页节流延时对子进程 main.py 生效（批量下载工具读取该环境变量）。
+    # 让每页节流延时对子进程 main.py 生效(批量下载工具读取该环境变量).
     if args.page_delay_seconds and args.page_delay_seconds > 0:
         os.environ['BROWSER_USE_PAGE_DELAY_SECONDS'] = str(args.page_delay_seconds)
-    # 透传真实 Chrome / 代理配置给子进程 main.py（build_browser 读取这些环境变量）。
+    # 透传真实 Chrome / 代理配置给子进程 main.py(build_browser 读取这些环境变量).
     if args.chrome_executable:
         os.environ['IDP_CHROME_EXECUTABLE'] = args.chrome_executable
     if args.chrome_user_data_dir:
@@ -967,7 +925,7 @@ def main() -> int:
         os.environ['IDP_CHROME_PROFILE_DIRECTORY'] = args.chrome_profile_directory
     if args.proxy_server:
         os.environ['IDP_PROXY_SERVER'] = args.proxy_server
-    # 方案C：透传取证配置（auto_run 内部及 fetch_cf_cookie.py 都从这些环境变量读取）。
+    # 方案C:透传取证配置(auto_run 内部及 fetch_cf_cookie.py 都从这些环境变量读取).
     if args.scrapling_python:
         os.environ['IDP_SCRAPLING_PYTHON'] = args.scrapling_python
     if args.cf_url:
@@ -1003,3 +961,4 @@ def main() -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
+

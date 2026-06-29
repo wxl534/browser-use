@@ -119,7 +119,7 @@ def http_server():
 		content_type='text/html',
 	)
 
-	# Page 6: Input where clear fails — input event listener restores old text
+	# Page 6: Input where clear fails - input event listener restores old text
 	# Simulates a framework-controlled input where clearing triggers re-render with old state
 	server.expect_request('/sticky-input').respond_with_data(
 		"""
@@ -360,11 +360,11 @@ class TestAutocompleteInteraction:
 		await tools.input(index=combo_idx, text='hi', browser_session=browser_session)
 		duration = time.monotonic() - t0
 
-		# The 400ms sleep is a hard floor — total duration must exceed it
+		# The 400ms sleep is a hard floor - total duration must exceed it
 		assert duration >= 0.4, f'Combobox delay not present: input took only {duration:.3f}s (expected >= 0.4s)'
 
 	async def test_datalist_field_no_delay(self, tools: Tools, browser_session: BrowserSession, base_url: str):
-		"""Native datalist fields should NOT get the 400ms delay — browser handles them instantly."""
+		"""Native datalist fields should NOT get the 400ms delay - browser handles them instantly."""
 		import time
 
 		await tools.navigate(url=f'{base_url}/datalist-field', new_tab=False, browser_session=browser_session)

@@ -1,14 +1,14 @@
 """
-站点无关的搜索页批量下载编排。
+站点无关的搜索页批量下载编排.
 
 ``run_search_page_batch`` 是把 ``download_current_idp_search_page_images``
-里那段三阶段流水线拎出来的通用版本。它只跟 ``SiteAdapter`` 打交道：
-- Phase 1 顺序解析 search items + manifest（站点差异由 adapter 提供）
+里那段三阶段流水线拎出来的通用版本.它只跟 ``SiteAdapter`` 打交道:
+- Phase 1 顺序解析 search items + manifest(站点差异由 adapter 提供)
 - Phase 2 通过 ``ConcurrentImageDownloader`` 并发拉图片字节
 - Phase 3 在 ``DOWNLOAD_LOCK`` 内串行落库
 
-记录、去重、校验等工具函数仍住在 ``tools_registry`` 里，本模块以**惰性导入**
-的方式拿，避免与之形成 import 循环。
+记录,去重,校验等工具函数仍住在 ``tools_registry`` 里,本模块以**惰性导入**
+的方式拿,避免与之形成 import 循环.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from concurrent_download import ConcurrentImageDownloader, image_download_concur
 
 
 # ---------------------------------------------------------------------------
-# 站点状态文件 IO（按 adapter.site_id 命名）
+# 站点状态文件 IO(按 adapter.site_id 命名)
 # ---------------------------------------------------------------------------
 
 def _site_progress_path(adapter: SiteAdapter, agent_data_dir: Path) -> Path:
@@ -90,7 +90,7 @@ def record_empty_page_event(
 
 
 # ---------------------------------------------------------------------------
-# 自愈：保证当前 tab 在该站点的搜索结果页 + JS 异常时刷新重试一次
+# 自愈:保证当前 tab 在该站点的搜索结果页 + JS 异常时刷新重试一次
 # ---------------------------------------------------------------------------
 
 async def ensure_on_results_page(
@@ -99,8 +99,8 @@ async def ensure_on_results_page(
     agent_data_dir: Path,
 ) -> tuple[str, bool, str]:
     """
-    确保当前 tab 在 adapter 站点的搜索结果页。否则用 progress 状态推算 canonical
-    URL，自动跳转回去。返回 (current_url, navigated, note)。
+    确保当前 tab 在 adapter 站点的搜索结果页.否则用 progress 状态推算 canonical
+    URL,自动跳转回去.返回 (current_url, navigated, note).
     """
     from tools_registry import _current_browser_url, _navigate_to_image_url
 
@@ -119,11 +119,11 @@ async def ensure_on_results_page(
 
 
 async def _hard_reload(browser_session: Any, url: str) -> None:
-    """用 CDP ``Page.navigate`` 强制顶层导航。
+    """用 CDP ``Page.navigate`` 强制顶层导航.
 
-    当页面 JS 执行上下文已被 Cloudflare/导航摧毁时，``window.location`` 赋值这类
-    JS 方式会一起失效；``Page.navigate`` 不依赖页面内 JS 上下文，仍能触发一次干净的
-    重新加载并重建执行上下文，是从“整页 JS 都 Uncaught”状态恢复的关键。
+    当页面 JS 执行上下文已被 Cloudflare/导航摧毁时,``window.location`` 赋值这类
+    JS 方式会一起失效;``Page.navigate`` 不依赖页面内 JS 上下文,仍能触发一次干净的
+    重新加载并重建执行上下文,是从“整页 JS 都 Uncaught”状态恢复的关键.
     """
     cdp_session = await browser_session.get_or_create_cdp_session()
     await cdp_session.cdp_client.send.Page.navigate(
@@ -140,11 +140,11 @@ async def extract_with_recovery(
     max_items: int,
     start_index: int,
 ) -> tuple[SearchPageResult, str]:
-    """``adapter.extract_items`` + 自愈。
+    """``adapter.extract_items`` + 自愈.
 
-    首次提取 JS 失败通常意味着执行上下文被破坏（疑似 Cloudflare 反爬/人机校验）。
-    此时普通的 ``window.location`` 跳转无效，改用 ``Page.navigate`` 硬重载，并做多次
-    退避重试，给 Cloudflare “Just a moment…” 这类会自动放行的挑战页留出通过时间。
+    首次提取 JS 失败通常意味着执行上下文被破坏(疑似 Cloudflare 反爬/人机校验).
+    此时普通的 ``window.location`` 跳转无效,改用 ``Page.navigate`` 硬重载,并做多次
+    退避重试,给 Cloudflare “Just a moment…” 这类会自动放行的挑战页留出通过时间.
     """
     from tools_registry import _current_browser_url
 
@@ -159,7 +159,7 @@ async def extract_with_recovery(
     except RuntimeError as exc:
         last_exc: Exception = exc
 
-    # 目标 URL：优先当前 URL（上下文已死时探测会返回 ''），否则用进度推算的 canonical 搜索 URL。
+    # 目标 URL:优先当前 URL(上下文已死时探测会返回 ''),否则用进度推算的 canonical 搜索 URL.
     target_url = await _current_browser_url(browser_session)
     if not target_url:
         target_url = adapter.canonical_resume_url(load_site_progress(adapter, agent_data_dir))
@@ -170,7 +170,7 @@ async def extract_with_recovery(
                 await _hard_reload(browser_session, target_url)
             except Exception:
                 pass
-        await asyncio.sleep(min(5 * attempt, 15))  # 退避，等待挑战页自动放行
+        await asyncio.sleep(min(5 * attempt, 15))  # 退避,等待挑战页自动放行
         try:
             page_data = await adapter.extract_items(
                 browser_session,
@@ -180,7 +180,7 @@ async def extract_with_recovery(
             retry_note = (
                 f'首次提取 JS 异常（{last_exc}）；用 Page.navigate 硬重载后第 {attempt} 次重试成功'
             )
-            return page_data, (nav_note + '；' + retry_note) if nav_note else retry_note
+            return page_data, (nav_note + ';' + retry_note) if nav_note else retry_note
         except RuntimeError as retry_exc:
             last_exc = retry_exc
             refreshed = await _current_browser_url(browser_session)
@@ -188,8 +188,8 @@ async def extract_with_recovery(
                 target_url = refreshed
 
     raise RuntimeError(
-        '[context_lost] 连续多次提取失败，页面 JS 执行上下文持续不可用'
-        '（疑似 Cloudflare 反爬/人机校验，需人工在浏览器中通过验证或更换网络/代理后再续跑）。'
+        '[context_lost] 连续多次提取失败,页面 JS 执行上下文持续不可用'
+        '(疑似 Cloudflare 反爬/人机校验,需人工在浏览器中通过验证或更换网络/代理后再续跑).'
         f'最后错误：{last_exc}'
     )
 
@@ -217,7 +217,7 @@ def effective_start_index(
     requested_start_index: int,
     page: int,
 ) -> tuple[int, str]:
-    """禁止 agent 用 start_index=0 把已推进的页码倒退。"""
+    """禁止 agent 用 start_index=0 把已推进的页码倒退."""
     try:
         requested = max(0, int(requested_start_index))
     except (TypeError, ValueError):
@@ -249,15 +249,15 @@ async def run_search_page_batch(
     browser_session: Any,
 ) -> ActionResult:
     """
-    把当前 tab 上的一整页搜索结果批量下成图片。``params`` 鸭子类型，
-    需要的字段见 ``DownloadCurrentIdpSearchPageImagesParams``。
+    把当前 tab 上的一整页搜索结果批量下成图片.``params`` 鸭子类型,
+    需要的字段见 ``DownloadCurrentIdpSearchPageImagesParams``.
 
-    流水线：
-      Phase 1：顺序拉 manifest，解析图片 URL，剔除已下载 URL。
-      Phase 2：通过共享 ``ConcurrentImageDownloader`` 并发拉图片字节。
-      Phase 3：``DOWNLOAD_LOCK`` 内串行做 sha256 / 去重 / JSONL 追加。
+    流水线:
+      Phase 1:顺序拉 manifest,解析图片 URL,剔除已下载 URL.
+      Phase 2:通过共享 ``ConcurrentImageDownloader`` 并发拉图片字节.
+      Phase 3:``DOWNLOAD_LOCK`` 内串行做 sha256 / 去重 / JSONL 追加.
     """
-    # 惰性导入：避免与 tools_registry 形成 import 循环
+    # 惰性导入:避免与 tools_registry 形成 import 循环
     from idp_page_progress import mark_page_batch_result
     from tools_registry import (
         AGENT_DATA_DIR,
@@ -291,9 +291,9 @@ async def run_search_page_batch(
                 target_count=params.target_count,
                 record_filename=params.record_filename,
             ))
-            return ActionResult(extracted_content='✅ 已达到目标数量，无需继续下载。\n' + report, include_in_memory=True)
+            return ActionResult(extracted_content='✅ 已达到目标数量,无需继续下载.\n' + report, include_in_memory=True)
 
-        # 反爬节流：每页批量下载前按需等待，降低触发 Cloudflare 限流的概率。
+        # 反爬节流:每页批量下载前按需等待,降低触发 Cloudflare 限流的概率.
         pacing_delay = page_delay_seconds()
         if pacing_delay > 0:
             await asyncio.sleep(pacing_delay)
@@ -325,7 +325,7 @@ async def run_search_page_batch(
             advice = (
                 f'请立刻调用 finish_download_task 结束本次会话，最终数字必须来自 '
                 f'{adapter.progress_file_name} / image_record.jsonl；'
-                '禁止改为手动点击详情页 / IIIF manifest tab / evaluate 扫 DOM 的方式继续。'
+                '禁止改为手动点击详情页 / IIIF manifest tab / evaluate 扫 DOM 的方式继续.'
                 if corrupted
                 else f'请勿改为手动点击详情页；重启浏览器会话后再从 {adapter.page_progress_file_name} 续跑。'
             )
@@ -342,9 +342,9 @@ async def run_search_page_batch(
         if not items:
             page_url_for_retry = page_data.page_url or current_url
             keyword_for_retry, page_for_retry, limit_for_retry = adapter.parse_search_url(page_url_for_retry)
-            # 关键区分：当前页“已全部消费”（start_index 已达到/超过本页 total_found）不是失败，
-            # 而是应当翻到下一页的正常信号。早期版本把它误判为 [idp_empty_page] 失败，
-            # 又因 task.md 规则禁止在 [idp_empty_page] 后翻页，导致 agent 被永久卡在同一页。
+            # 关键区分:当前页“已全部消费”(start_index 已达到/超过本页 total_found)不是失败,
+            # 而是应当翻到下一页的正常信号.早期版本把它误判为 [idp_empty_page] 失败,
+            # 又因 task.md 规则禁止在 [idp_empty_page] 后翻页,导致 agent 被永久卡在同一页.
             page_consumed = page_data.total_found > 0 and start_index >= page_data.total_found
             if page_consumed:
                 active_page = mark_page_batch_result(
@@ -411,9 +411,9 @@ async def run_search_page_batch(
             })
             write_site_progress(adapter, AGENT_DATA_DIR, progress_after_empty)
             advice = (
-                '请立刻调用 finish_download_task 结束本次会话，最终数字必须来自 '
+                '请立刻调用 finish_download_task 结束本次会话,最终数字必须来自 '
                 f'{adapter.progress_file_name} / image_record.jsonl；'
-                '禁止退化为手动点击。'
+                '禁止退化为手动点击.'
                 if corrupted
                 else f'请重启浏览器会话后从 {adapter.page_progress_file_name} 续跑；不要在当前会话用手动点击替代批量工具。'
             )
@@ -440,7 +440,7 @@ async def run_search_page_batch(
         processed_items = 0
 
         async with DOWNLOAD_LOCK:
-            # ---------- Phase 1：顺序解析 item + 过滤已下载 URL ----------
+            # ---------- Phase 1:顺序解析 item + 过滤已下载 URL ----------
             candidates: list[dict] = []
             remaining_target = max(0, params.target_count - record_index.downloaded_count)
             candidate_cap = max(remaining_target + len(items), max_items)
@@ -488,7 +488,7 @@ async def run_search_page_batch(
                     })
                     per_item_added += 1
 
-            # ---------- Phase 2：共享 aiohttp 会话 + 并发拉图片字节 ----------
+            # ---------- Phase 2:共享 aiohttp 会话 + 并发拉图片字节 ----------
             async def _fetch_one(index: int, cand: dict) -> dict:
                 tmp_target = _unique_path(
                     IMAGE_DIR / f'{params.file_prefix}_pending_{index:04d}{_image_suffix_from_url(cand["image_url"])}'
@@ -526,7 +526,7 @@ async def run_search_page_batch(
                 async with ConcurrentImageDownloader(timeout_seconds=params.timeout_seconds) as downloader:
                     fetch_results = await asyncio.gather(*(_fetch_one(i, c) for i, c in enumerate(candidates)))
 
-            # ---------- Phase 3：串行 sha256 + 去重 + 落库 ----------
+            # ---------- Phase 3:串行 sha256 + 去重 + 落库 ----------
             for result in fetch_results:
                 image_url = result['image_url']
                 page_url = result['page_url']
@@ -686,9 +686,9 @@ async def run_search_page_batch(
         advice = (
             f'请立刻调用 finish_download_task 结束本次会话，最终数字必须来自 '
             f'{adapter.progress_file_name} / image_record.jsonl；'
-            '禁止改为手动点击详情页 / IIIF manifest tab / evaluate 扫 DOM 的方式继续。'
+            '禁止改为手动点击详情页 / IIIF manifest tab / evaluate 扫 DOM 的方式继续.'
             if corrupted
-            else '请勿手动 fallback；重启浏览器会话后再继续。'
+            else '请勿手动 fallback;重启浏览器会话后再继续.'
         )
         return ActionResult(
             error=(

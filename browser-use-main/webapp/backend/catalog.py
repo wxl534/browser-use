@@ -1,9 +1,9 @@
-"""只读访问爬虫产物：image_catalog.sqlite3 + 运行时状态文件。
+"""只读访问爬虫产物:image_catalog.sqlite3 + 运行时状态文件.
 
-设计原则：
-- 数据库可能尚未生成（还没跑过任何任务），所有查询都要优雅降级为空结果。
-- 不写库；写操作（导入 SQLite）由 run_manager 在每轮结束后调用现有脚本完成。
-- 统计的"已下载数"以 image_record.jsonl 为准（与 supervisor 同源），不依赖 DB 是否最新。
+设计原则:
+- 数据库可能尚未生成(还没跑过任何任务),所有查询都要优雅降级为空结果.
+- 不写库;写操作(导入 SQLite)由 run_manager 在每轮结束后调用现有脚本完成.
+- 统计的"已下载数"以 image_record.jsonl 为准(与 supervisor 同源),不依赖 DB 是否最新.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import Any
 
 from . import paths
 
-# images 表里允许返回给前端的列（与 import_records_to_sqlite.py 的 schema 对齐）。
+# images 表里允许返回给前端的列(与 import_records_to_sqlite.py 的 schema 对齐).
 IMAGE_COLUMNS = [
     'id', 'source_site', 'source_item_id', 'sequence', 'status', 'title',
     'collection_title', 'page_url', 'image_url', 'file_name', 'file_path',
@@ -23,7 +23,7 @@ IMAGE_COLUMNS = [
     'import_run_id',
 ]
 
-# 允许前端排序的列白名单，避免 SQL 注入。
+# 允许前端排序的列白名单,避免 SQL 注入.
 SORTABLE = {'sequence', 'title', 'file_size', 'width', 'height', 'downloaded_at', 'imported_at', 'status'}
 
 
@@ -48,7 +48,7 @@ def db_available() -> bool:
 
 
 def _downloaded_count_from_jsonl() -> int:
-    """与 supervisor 同源的已下载计数（DB 未生成或落后时的权威来源）。"""
+    """与 supervisor 同源的已下载计数(DB 未生成或落后时的权威来源)."""
     record_file = paths.RECORD_FILE
     if not record_file.exists():
         return 0
@@ -68,7 +68,7 @@ def _downloaded_count_from_jsonl() -> int:
 
 def _read_target() -> int | None:
     try:
-        from auto_run_until_target import read_target_from_task
+        from runner import read_target_from_task
         return read_target_from_task(paths.TASK_FILE)
     except Exception:
         return None
@@ -76,7 +76,7 @@ def _read_target() -> int | None:
 
 def _read_keyword() -> str:
     try:
-        from auto_run_until_target import detect_search_keyword
+        from runner import detect_search_keyword
         if paths.TASK_FILE.exists():
             return detect_search_keyword(paths.TASK_FILE.read_text(encoding='utf-8'))
     except Exception:
@@ -186,7 +186,7 @@ def get_image(image_id: str) -> dict[str, Any] | None:
 
 
 def resolve_image_path(image_id: str) -> Path | None:
-    """返回图片文件的绝对路径（限定在 ImagesCache 内，防目录穿越）。"""
+    """返回图片文件的绝对路径(限定在 ImagesCache 内,防目录穿越)."""
     record = get_image(image_id)
     if not record:
         return None
@@ -239,3 +239,4 @@ def read_final_report() -> str | None:
         return paths.FINAL_REPORT_FILE.read_text(encoding='utf-8')
     except OSError:
         return None
+

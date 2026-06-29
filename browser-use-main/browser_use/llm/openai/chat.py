@@ -55,7 +55,7 @@ def _auth_block_error_from_status(error: 'APIStatusError', model: str, base_url:
 		message=(
 			'LLM endpoint returned an HTML gateway/portal page instead of a JSON completion. '
 			'This usually means the request was intercepted by a captive portal, campus network / VPN gate, '
-			'or a WAF — check that the machine can reach the LLM endpoint (e.g. connect the required VPN) '
+			'or a WAF - check that the machine can reach the LLM endpoint (e.g. connect the required VPN) '
 			f'and that OPENAI_API_KEY / base_url are correct.{hint}'
 		),
 		status_code=getattr(error, 'status_code', 403) or 403,
@@ -360,7 +360,7 @@ class ChatOpenAI(BaseChatModel):
 					message=(
 						'LLM endpoint returned an HTML gateway/portal page instead of a JSON completion. '
 						'This usually means the request was intercepted by a captive portal, campus network / VPN gate, '
-						'or a WAF — check that the machine can reach the LLM endpoint (e.g. connect the required VPN) '
+						'or a WAF - check that the machine can reach the LLM endpoint (e.g. connect the required VPN) '
 						f'and that OPENAI_API_KEY / base_url are correct.{hint}'
 					),
 					model=self.name,

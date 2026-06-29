@@ -351,7 +351,7 @@ def create_namespace(
 		)
 		if re.search(custom_tool_pattern, code):
 			raise ValueError(
-				'禁止通过 evaluate() 调用 LOC 自定义工具。请把这些工具作为独立 tool action 直接调用。'
+				'禁止通过 evaluate() 调用 LOC 自定义工具.请把这些工具作为独立 tool action 直接调用.'
 			)
 
 		# Inject variables if provided

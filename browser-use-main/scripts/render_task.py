@@ -1,25 +1,25 @@
 #!/usr/bin/env python
-"""把 task_template.md + task_config.json 渲染成 task.md。
+"""把 task_template.md + task_config.json 渲染成 task.md.
 
-设计目标：task.md 不再手改。要改搜索词 / 目标值 / 站点 / 模式 / force_generic，
-只改 task_config.json（或用本脚本的命令行参数覆盖），然后重新渲染。
+设计目标:task.md 不再手改.要改搜索词 / 目标值 / 站点 / 模式 / force_generic,
+只改 task_config.json(或用本脚本的命令行参数覆盖),然后重新渲染.
 
-单一真相源：task_config.json。字段：
+单一真相源:task_config.json.字段:
   keyword         搜索关键词
   target_count    目标有效下载总数
   site_url        目标站点首页 URL
-  site_label      报告/标题里用的站点显示名（留空自动按 site_url 主机名推导）
+  site_label      报告/标题里用的站点显示名(留空自动按 site_url 主机名推导)
   allowed_hosts   允许下载的域名后缀白名单
-  mode            "idp_batch"（站点专属批量）| "generic_per_item"（任意站点逐 item 稳定路径）
-  force_generic   通用下载是否跳过站点专属 manifest 加速（稳定优先）
-  item_selector   非注册站点的 item 详情链接 CSS 选择器（generic 模式才需要）
+  mode            "idp_batch"(站点专属批量)| "generic_per_item"(任意站点逐 item 稳定路径)
+  force_generic   通用下载是否跳过站点专属 manifest 加速(稳定优先)
+  item_selector   非注册站点的 item 详情链接 CSS 选择器(generic 模式才需要)
 
-命令行（任一参数会覆盖 config 并写回 task_config.json）：
+命令行(任一参数会覆盖 config 并写回 task_config.json):
   python render_task.py                          # 用现有 config 渲染
   python render_task.py --keyword "india buddhist" --target 8000
   python render_task.py --mode generic_per_item --site https://example.org/ \
         --allowed-hosts example.org,img.example.org --force-generic
-  python render_task.py --print                  # 渲染到 stdout，不写 task.md
+  python render_task.py --print                  # 渲染到 stdout,不写 task.md
 """
 from __future__ import annotations
 
@@ -108,10 +108,10 @@ def build_context(cfg: dict) -> dict:
     return ctx
 
 
-# 只匹配「最内层」if 块：块体内不得再含 {{#if 或 {{/if}}，配合下面的 while 循环
-# 从内向外逐层求值，从而真正支持嵌套（避免惰性 .*? 把外层 if 与内层 {{/if}} 错配）。
-# 注意：结尾不再吞换行——块级 if 自有前导换行即可，行内 if（如 ...{{/if}}\n下一行）
-# 若吞掉结尾换行会把下一行并到本行，多余空行交由末尾 \n{3,}→\n\n 收敛。
+# 只匹配「最内层」if 块:块体内不得再含 {{#if 或 {{/if}},配合下面的 while 循环
+# 从内向外逐层求值,从而真正支持嵌套(避免惰性 .*? 把外层 if 与内层 {{/if}} 错配).
+# 注意:结尾不再吞换行--块级 if 自有前导换行即可,行内 if(如 ...{{/if}}\n下一行)
+# 若吞掉结尾换行会把下一行并到本行,多余空行交由末尾 \n{3,}→\n\n 收敛.
 _IF_BLOCK = re.compile(
     r'\{\{#if (\w+)\}\}\n?((?:(?!\{\{#if |\{\{/if\}\}).)*?)\{\{/if\}\}',
     re.DOTALL,
@@ -120,7 +120,7 @@ _VAR = re.compile(r'\{\{\s*(\w+)\s*\}\}')
 
 
 def render(template: str, ctx: dict) -> str:
-    """极简模板引擎：先按 {{#if key}}..{{/if}} 取舍块（从内向外逐层、循环到稳定，支持嵌套），再做 {{ var }} 替换。"""
+    """极简模板引擎:先按 {{#if key}}..{{/if}} 取舍块(从内向外逐层,循环到稳定,支持嵌套),再做 {{ var }} 替换."""
     def strip_blocks(text: str) -> str:
         def repl(match: re.Match) -> str:
             key, body = match.group(1), match.group(2)
@@ -136,7 +136,7 @@ def render(template: str, ctx: dict) -> str:
 
     text = strip_blocks(template)
     text = _VAR.sub(sub_vars, text)
-    # 收敛多余空行（条件块删除后可能留下 3+ 连续换行）
+    # 收敛多余空行(条件块删除后可能留下 3+ 连续换行)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text
 
@@ -181,19 +181,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--keyword', type=str, default=None, help='搜索关键词')
     parser.add_argument('--target', type=int, default=None, help='目标有效下载总数')
     parser.add_argument('--site', type=str, default=None, help='目标站点首页 URL')
-    parser.add_argument('--site-label', type=str, default=None, help='站点显示名（留空自动按主机名）')
-    parser.add_argument('--allowed-hosts', type=str, default=None, help='允许域名后缀白名单，逗号分隔')
+    parser.add_argument('--site-label', type=str, default=None, help='站点显示名(留空自动按主机名)')
+    parser.add_argument('--allowed-hosts', type=str, default=None, help='允许域名后缀白名单,逗号分隔')
     parser.add_argument('--mode', choices=VALID_MODES, default=None, help='idp_batch | generic_per_item')
     parser.add_argument('--item-selector', type=str, default=None, help='非注册站点的 item 链接 CSS 选择器')
     fg = parser.add_mutually_exclusive_group()
     fg.add_argument('--force-generic', dest='force_generic', action='store_true', default=None,
-                    help='通用下载跳过站点 manifest 加速（稳定优先）')
+                    help='通用下载跳过站点 manifest 加速(稳定优先)')
     fg.add_argument('--no-force-generic', dest='force_generic', action='store_false', default=None,
                     help='关闭 force_generic')
     parser.add_argument('--config', type=Path, default=CONFIG_FILE, help='task_config.json 路径')
     parser.add_argument('--template', type=Path, default=TEMPLATE_FILE, help='模板路径')
     parser.add_argument('--output', type=Path, default=TASK_FILE, help='输出 task.md 路径')
-    parser.add_argument('--print', action='store_true', help='渲染到 stdout，不写文件、不改 config')
+    parser.add_argument('--print', action='store_true', help='渲染到 stdout,不写文件,不改 config')
     return parser.parse_args()
 
 

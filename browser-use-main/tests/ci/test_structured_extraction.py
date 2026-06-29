@@ -545,7 +545,7 @@ class TestExtractionSchemaInjection:
 		await tools.navigate(url=f'{base_url}/products', new_tab=False, browser_session=browser_session)
 		await asyncio.sleep(0.5)
 
-		# Different schema than the injected one — just a name list
+		# Different schema than the injected one - just a name list
 		param_schema = {
 			'type': 'object',
 			'properties': {

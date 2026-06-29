@@ -1,6 +1,6 @@
-"""`navigate_idp_search_page` 工具：从 tools_registry.py 拆分而来。
+"""`navigate_idp_search_page` 工具:从 tools_registry.py 拆分而来.
 
-共享 helper / 参数模型仍由 tools_registry 提供；运行时全局通过 tr.* 实时读取。
+共享 helper / 参数模型仍由 tools_registry 提供;运行时全局通过 tr.* 实时读取.
 """
 import tools_registry as tr
 from tools_registry import (
@@ -19,7 +19,7 @@ from tools_registry import (
 
 
 @tools.action(
-    description='生成并跳转到 IDP 官方搜索结果页，避免 agent 手拼 URL 时把 page=21 写成 page=2D、term 写成 china%2Otemple 等脏参数。',
+    description='生成并跳转到 IDP 官方搜索结果页,避免 agent 手拼 URL 时把 page=21 写成 page=2D,term 写成 china%2Otemple 等脏参数.',
     param_model=NavigateIdpSearchPageParams,
 )
 async def navigate_idp_search_page(params: NavigateIdpSearchPageParams, browser_session):

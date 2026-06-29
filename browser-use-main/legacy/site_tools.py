@@ -1,11 +1,11 @@
-"""LOC / Kyohaku 站点特有工具（从 tools_registry.py 物理迁出）。
+"""LOC / Kyohaku 站点特有工具(从 tools_registry.py 物理迁出).
 
-这些工具默认不注册（受 tools_registry.legacy_tools_action 把关，需
-BROWSER_USE_ENABLE_LEGACY_TOOLS=1 才进入 agent 工具目录）。共享 helper /
-运行时全局仍由 tools_registry 提供，本模块只负责承载 LOC/Kyohaku 专有逻辑，
-保持主 tools_registry.py 干净。IDP 仍留在主流程，不在此处。
+这些工具默认不注册(受 tools_registry.legacy_tools_action 把关,需
+BROWSER_USE_ENABLE_LEGACY_TOOLS=1 才进入 agent 工具目录).共享 helper /
+运行时全局仍由 tools_registry 提供,本模块只负责承载 LOC/Kyohaku 专有逻辑,
+保持主 tools_registry.py 干净.IDP 仍留在主流程,不在此处.
 
-本文件由 _extract_legacy.py 自动生成式迁移，保持原始定义顺序。
+本文件由 _extract_legacy.py 自动生成式迁移,保持原始定义顺序.
 """
 from __future__ import annotations
 
@@ -57,8 +57,8 @@ KYOHAKU_METHODS = ('python_direct', 'browser_context_fetch', 'clean_screenshot')
 
 def _append_download_title(title: str, title_file: Path | None = None) -> Path:
     """
-    Legacy LOC/Kyohaku 专用：将成功下载的图片标题追加写入 title.txt。
-    （通用核心已移除 title.txt，本函数仅供默认关闭的 legacy 工具使用。）
+    Legacy LOC/Kyohaku 专用:将成功下载的图片标题追加写入 title.txt.
+    (通用核心已移除 title.txt,本函数仅供默认关闭的 legacy 工具使用.)
     """
     target_file = title_file or AGENT_DATA_DIR / 'title.txt'
     target_file.parent.mkdir(parents=True, exist_ok=True)
@@ -90,28 +90,28 @@ class CollectKyohakuResultsParams(BaseModel):
 class GetNextLocQueueItemParams(BaseModel):
     """读取下一个待处理 LOC 队列项的参数模型"""
     queue_filename: str = Field(default='loc_result_queue.json', description='browseruse_agent_data 中的队列文件名')
-    mark_in_progress: bool = Field(default=True, description='返回后是否把该条目标记为 in_progress，避免重复领取')
+    mark_in_progress: bool = Field(default=True, description='返回后是否把该条目标记为 in_progress,避免重复领取')
 
 
 class GetNextKyohakuQueueItemParams(BaseModel):
     """读取下一个待处理 Kyohaku 队列项的参数模型"""
     queue_filename: str = Field(default='kyohaku_result_queue.json', description='browseruse_agent_data 中的队列文件名')
-    mark_in_progress: bool = Field(default=True, description='返回后是否把该条目标记为 in_progress，避免重复领取')
+    mark_in_progress: bool = Field(default=True, description='返回后是否把该条目标记为 in_progress,避免重复领取')
 
 
 class MarkLocQueueItemParams(BaseModel):
     """更新 LOC 队列项状态的参数模型"""
     url: str = Field(description='要更新状态的 LOC item URL')
-    status: str = Field(description='新状态：pending、in_progress、downloaded、skipped 或 failed')
-    error: str | None = Field(default=None, description='失败或跳过原因；成功/待处理状态会清理旧 error')
+    status: str = Field(description='新状态:pending,in_progress,downloaded,skipped 或 failed')
+    error: str | None = Field(default=None, description='失败或跳过原因;成功/待处理状态会清理旧 error')
     queue_filename: str = Field(default='loc_result_queue.json', description='browseruse_agent_data 中的队列文件名')
 
 
 class MarkKyohakuQueueItemParams(BaseModel):
     """更新 Kyohaku 队列项状态的参数模型"""
     url: str = Field(description='要更新状态的 Kyohaku 藏品 URL')
-    status: str = Field(description='新状态：pending、in_progress、downloaded、skipped 或 failed')
-    error: str | None = Field(default=None, description='失败或跳过原因；成功/待处理状态会清理旧 error')
+    status: str = Field(description='新状态:pending,in_progress,downloaded,skipped 或 failed')
+    error: str | None = Field(default=None, description='失败或跳过原因;成功/待处理状态会清理旧 error')
     queue_filename: str = Field(default='kyohaku_result_queue.json', description='browseruse_agent_data 中的队列文件名')
 
 
@@ -119,20 +119,20 @@ class RebuildLocDownloadStateParams(BaseModel):
     """重建 LOC 下载状态的参数模型"""
     remove_irrelevant: bool = Field(default=True, description='是否从队列中移除明显不相关的 LOC 条目')
     reset_in_progress: bool = Field(default=True, description='是否把运行中断留下的 in_progress 重置为 pending')
-    rewrite_title_file: bool = Field(default=True, description='是否根据成功下载记录重写 title.txt，并自动备份旧文件')
+    rewrite_title_file: bool = Field(default=True, description='是否根据成功下载记录重写 title.txt,并自动备份旧文件')
 
 
 class DownloadKyohakuImageParams(BaseModel):
     """直接下载京都国立博物馆图片并记录元数据的参数模型"""
-    sequence: int = Field(ge=1, description='图片序号，从 1 开始，应与保存文件名顺序一致')
-    file_name: str = Field(description='保存文件名或基础名，例如 temple_001；扩展名会优先使用原图 URL 的扩展名')
-    title: str = Field(description='用于最终重命名的短标题，例如 寺_001_藏品标题_图1')
+    sequence: int = Field(ge=1, description='图片序号,从 1 开始,应与保存文件名顺序一致')
+    file_name: str = Field(description='保存文件名或基础名,例如 temple_001;扩展名会优先使用原图 URL 的扩展名')
+    title: str = Field(description='用于最终重命名的短标题,例如 寺_001_藏品标题_图1')
     collection_title: str = Field(default='', description='藏品页面显示的原始标题')
-    page_url: str = Field(default='', description='藏品详情页 URL；为空时使用当前页面 URL')
-    image_url: str = Field(default='', description='原始图片 URL；为空时工具会从当前 DOM 自动查找 /art_images/ 图片')
-    image_index: int = Field(default=0, ge=0, description='当页面有多个 /art_images/ 图片时选择第几个，按大图优先排序')
+    page_url: str = Field(default='', description='藏品详情页 URL;为空时使用当前页面 URL')
+    image_url: str = Field(default='', description='原始图片 URL;为空时工具会从当前 DOM 自动查找 /art_images/ 图片')
+    image_index: int = Field(default=0, ge=0, description='当页面有多个 /art_images/ 图片时选择第几个,按大图优先排序')
     evidence: str = Field(default='', description='判断与关键词相关的证据')
-    metadata: str = Field(default='', description='作者、时代、分类、馆藏号等信息')
+    metadata: str = Field(default='', description='作者,时代,分类,馆藏号等信息')
     summary: str = Field(default='', description='图片或藏品的简短中文说明')
     record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名')
     info_filename: str = Field(default='temple_photo_info.md', description='Markdown 信息表文件名')
@@ -141,35 +141,35 @@ class DownloadKyohakuImageParams(BaseModel):
 
 class CleanKyohakuScreenshotParams(BaseModel):
     """打开 Kyohaku 原图页后精确截图并记录元数据的参数模型"""
-    sequence: int = Field(ge=1, description='图片序号，从 1 开始，应与保存文件名顺序一致')
-    file_name: str = Field(description='截图保存文件名或基础名，例如 temple_001；默认尽量沿用原图扩展名')
-    title: str = Field(description='用于最终重命名的短标题，例如 寺_001_藏品标题_图1')
+    sequence: int = Field(ge=1, description='图片序号,从 1 开始,应与保存文件名顺序一致')
+    file_name: str = Field(description='截图保存文件名或基础名,例如 temple_001;默认尽量沿用原图扩展名')
+    title: str = Field(description='用于最终重命名的短标题,例如 寺_001_藏品标题_图1')
     collection_title: str = Field(default='', description='藏品页面显示的原始标题')
     page_url: str = Field(default='', description='藏品详情页 URL')
-    image_url: str = Field(default='', description='原图页 URL，例如 https://knmdb.kyohaku.go.jp/art_images/...-L.jpg；为空时使用当前页面')
+    image_url: str = Field(default='', description='原图页 URL,例如 https://knmdb.kyohaku.go.jp/art_images/...-L.jpg;为空时使用当前页面')
     evidence: str = Field(default='', description='判断与关键词相关的证据')
-    metadata: str = Field(default='', description='作者、时代、分类、馆藏号等信息')
+    metadata: str = Field(default='', description='作者,时代,分类,馆藏号等信息')
     summary: str = Field(default='', description='图片或藏品的简短中文说明')
     record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名')
     info_filename: str = Field(default='temple_photo_info.md', description='Markdown 信息表文件名')
-    black_threshold: int = Field(default=18, ge=0, le=80, description='自动去黑边阈值，越大越容易裁掉深色边框')
-    white_threshold: int = Field(default=245, ge=180, le=255, description='自动去白边阈值，越小越容易裁掉浅色边框')
-    border_ratio: float = Field(default=0.985, description='一整行/列超过该比例为黑色或白色时才视为边框；工具会把异常值归一化到 0.90-0.999')
-    prefer_native_download: bool = Field(default=True, description='如果提供了原图 URL，优先保存原始图片字节，不重新截图编码')
-    preserve_source_format: bool = Field(default=True, description='截图裁剪后是否沿用原图 URL 的扩展名重新编码；否则输出 PNG')
+    black_threshold: int = Field(default=18, ge=0, le=80, description='自动去黑边阈值,越大越容易裁掉深色边框')
+    white_threshold: int = Field(default=245, ge=180, le=255, description='自动去白边阈值,越小越容易裁掉浅色边框')
+    border_ratio: float = Field(default=0.985, description='一整行/列超过该比例为黑色或白色时才视为边框;工具会把异常值归一化到 0.90-0.999')
+    prefer_native_download: bool = Field(default=True, description='如果提供了原图 URL,优先保存原始图片字节,不重新截图编码')
+    preserve_source_format: bool = Field(default=True, description='截图裁剪后是否沿用原图 URL 的扩展名重新编码;否则输出 PNG')
 
 
 class SaveKyohakuImageViaBrowserParams(BaseModel):
     """使用浏览器页面上下文保存 Kyohaku 图片并记录元数据的参数模型"""
-    sequence: int = Field(ge=1, description='图片序号，从 1 开始，应与保存文件名顺序一致')
-    file_name: str = Field(description='保存文件名或基础名，例如 temple_001；扩展名会优先使用原图 URL 的扩展名')
-    title: str = Field(description='用于最终重命名的短标题，例如 china_temple_001_藏品标题_图1')
+    sequence: int = Field(ge=1, description='图片序号,从 1 开始,应与保存文件名顺序一致')
+    file_name: str = Field(description='保存文件名或基础名,例如 temple_001;扩展名会优先使用原图 URL 的扩展名')
+    title: str = Field(description='用于最终重命名的短标题,例如 china_temple_001_藏品标题_图1')
     collection_title: str = Field(default='', description='藏品页面显示的原始标题')
-    page_url: str = Field(default='', description='藏品详情页 URL；为空时使用当前页面 URL')
-    image_url: str = Field(default='', description='原始图片 URL；为空时工具会从当前 DOM 自动查找 /art_images/ 图片')
-    image_index: int = Field(default=0, ge=0, description='当页面有多个 /art_images/ 图片时选择第几个，按大图优先排序')
+    page_url: str = Field(default='', description='藏品详情页 URL;为空时使用当前页面 URL')
+    image_url: str = Field(default='', description='原始图片 URL;为空时工具会从当前 DOM 自动查找 /art_images/ 图片')
+    image_index: int = Field(default=0, ge=0, description='当页面有多个 /art_images/ 图片时选择第几个,按大图优先排序')
     evidence: str = Field(default='', description='判断与关键词相关的证据')
-    metadata: str = Field(default='', description='作者、时代、分类、馆藏号等信息')
+    metadata: str = Field(default='', description='作者,时代,分类,馆藏号等信息')
     summary: str = Field(default='', description='图片或藏品的简短中文说明')
     record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名')
     info_filename: str = Field(default='temple_photo_info.md', description='Markdown 信息表文件名')
@@ -177,14 +177,14 @@ class SaveKyohakuImageViaBrowserParams(BaseModel):
 
 class DownloadCurrentKyohakuItemImagesParams(BaseModel):
     """批量下载当前 Kyohaku 藏品全部图片并记录元数据的参数模型"""
-    start_sequence: int = Field(ge=1, description='本藏品第一张图片的全局序号，从 1 开始')
+    start_sequence: int = Field(ge=1, description='本藏品第一张图片的全局序号,从 1 开始')
     max_images: int = Field(default=50, ge=1, le=300, description='当前藏品最多下载多少张图片')
-    file_prefix: str = Field(default='temple', description='保存文件名前缀，例如 temple 会生成 temple_001')
-    title_prefix: str = Field(default='china_temple', description='重命名标题前缀，例如 china_temple')
+    file_prefix: str = Field(default='temple', description='保存文件名前缀,例如 temple 会生成 temple_001')
+    title_prefix: str = Field(default='china_temple', description='重命名标题前缀,例如 china_temple')
     collection_title: str = Field(description='藏品页面显示的原始标题')
-    page_url: str = Field(default='', description='藏品详情页 URL；为空时使用当前页面 URL')
+    page_url: str = Field(default='', description='藏品详情页 URL;为空时使用当前页面 URL')
     evidence: str = Field(default='', description='判断与关键词相关的证据')
-    metadata: str = Field(default='', description='作者、时代、分类、馆藏号等信息')
+    metadata: str = Field(default='', description='作者,时代,分类,馆藏号等信息')
     summary: str = Field(default='', description='图片或藏品的简短中文说明')
     skip_existing_urls: bool = Field(default=True, description='是否跳过 image_record.jsonl 中已经成功记录过的 image_url')
     record_filename: str = Field(default='image_record.jsonl', description='结构化记录文件名')
@@ -194,7 +194,7 @@ class DownloadCurrentKyohakuItemImagesParams(BaseModel):
 
 def _record_download_status(record: dict, record_file: Path | None = None) -> Path:
     """
-    追加结构化下载记录，便于恢复和审计。
+    追加结构化下载记录,便于恢复和审计.
     """
     target_file = record_file or AGENT_DATA_DIR / 'download_record.jsonl'
     target_file.parent.mkdir(parents=True, exist_ok=True)
@@ -209,7 +209,7 @@ def _record_download_status(record: dict, record_file: Path | None = None) -> Pa
 
 async def _click_selected_download_button(browser_session) -> None:
     """
-    在当前详情页点击已选格式对应的 Go 按钮，作为 Python 直连被 403/520 拒绝时的兜底。
+    在当前详情页点击已选格式对应的 Go 按钮,作为 Python 直连被 403/520 拒绝时的兜底.
     """
     js_code = '''
     (function() {
@@ -243,7 +243,7 @@ async def _click_selected_download_button(browser_session) -> None:
 
 async def _wait_for_browser_tiff_download(output_dir: Path, before: dict[Path, float], timeout_seconds: int) -> Path:
     """
-    只轮询文件系统等待浏览器下载完成，不读取 browser-use 的下载状态，避免 watchdog 卡死。
+    只轮询文件系统等待浏览器下载完成,不读取 browser-use 的下载状态,避免 watchdog 卡死.
     """
     loop = asyncio.get_running_loop()
     grace_seconds = int(os.environ.get('BROWSER_USE_DOWNLOAD_GRACE_SECONDS', '120'))
@@ -288,7 +288,7 @@ async def _wait_for_browser_tiff_download(output_dir: Path, before: dict[Path, f
 
 def _match_late_download_file(record: dict, image_files: list[Path], used_paths: set[Path]) -> Path | None:
     """
-    为已经记为 failed、但浏览器稍后完成落盘的 TIFF 找回文件。
+    为已经记为 failed,但浏览器稍后完成落盘的 TIFF 找回文件.
     """
     download_url = str(record.get('url') or '')
     url_stem = Path(urlparse(download_url).path).stem.lower()
@@ -307,7 +307,7 @@ def _match_late_download_file(record: dict, image_files: list[Path], used_paths:
 
 def _reconcile_late_download_records(records: list[dict], record_file: Path, image_dir: Path) -> list[dict]:
     """
-    浏览器大文件可能在工具超时后才完成下载；重建状态时把这类文件补记为 downloaded。
+    浏览器大文件可能在工具超时后才完成下载;重建状态时把这类文件补记为 downloaded.
     """
     image_files = [
         path
@@ -360,7 +360,7 @@ def _reconcile_late_download_records(records: list[dict], record_file: Path, ima
 
 def _queue_file_path(queue_filename: str = 'loc_result_queue.json') -> Path:
     """
-    获取队列文件路径，并限制文件名只能落在 browseruse_agent_data 下。
+    获取队列文件路径,并限制文件名只能落在 browseruse_agent_data 下.
     """
     safe_name = Path((queue_filename or '').strip()).name
     if safe_name in {'', '.', '.loc_result_queue.json', 'loc_result_queue'} or not safe_name.endswith('.json'):
@@ -380,7 +380,7 @@ def _canonical_kyohaku_url(url: str) -> str:
 
 def _canonical_loc_url(url: str) -> str:
     """
-    规范化 LOC item URL，避免 query/hash/尾斜杠差异导致队列 URL 匹配失败。
+    规范化 LOC item URL,避免 query/hash/尾斜杠差异导致队列 URL 匹配失败.
     """
     parsed = urlparse((url or '').strip())
     path = parsed.path.rstrip('/')
@@ -392,7 +392,7 @@ def _canonical_loc_url(url: str) -> str:
 
 def _looks_relevant_loc_item(title: str, url: str = '') -> bool:
     """
-    粗过滤明显不属于 buddhist temple 图片任务的 LOC 条目，避免队列被错误搜索结果污染。
+    粗过滤明显不属于 buddhist temple 图片任务的 LOC 条目,避免队列被错误搜索结果污染.
     """
     text = f'{title} {url}'.lower()
     if not text.strip():
@@ -429,8 +429,8 @@ def _looks_relevant_loc_item(title: str, url: str = '') -> bool:
 
 async def _extract_current_kyohaku_item_image_urls(browser_session) -> dict:
     """
-    按当前藏品页面顺序提取所有大图 URL。
-    优先读取隐藏 viewer 中的 L 图，其次读取主图、缩略图 data-i 和普通 img src。
+    按当前藏品页面顺序提取所有大图 URL.
+    优先读取隐藏 viewer 中的 L 图,其次读取主图,缩略图 data-i 和普通 img src.
     """
     js_code = '''
     (function() {
@@ -576,7 +576,7 @@ def _queue_status_counts(items: list[dict]) -> dict[str, int]:
 
 def _update_result_queue_status(page_url: str, status: str, error: str | None = None) -> None:
     """
-    更新结果队列中的当前详情页状态，便于分批恢复。
+    更新结果队列中的当前详情页状态,便于分批恢复.
     """
     if not page_url:
         return
@@ -600,7 +600,7 @@ def _update_result_queue_status(page_url: str, status: str, error: str | None = 
 
 def _update_kyohaku_queue_status(page_url: str, status: str, error: str | None = None, queue_filename: str = 'kyohaku_result_queue.json') -> None:
     """
-    更新 Kyohaku 队列中的当前详情页状态，便于分批恢复。
+    更新 Kyohaku 队列中的当前详情页状态,便于分批恢复.
     """
     if not page_url:
         return
@@ -632,7 +632,7 @@ def _record_kyohaku_download_failure(
     record_filename: str = 'kyohaku_failed_record.jsonl',
 ) -> None:
     """
-    持久化 Kyohaku 下载失败记录，避免失败只停留在 ActionResult 中。
+    持久化 Kyohaku 下载失败记录,避免失败只停留在 ActionResult 中.
     """
     record_file = _image_record_file(record_filename)
     record_file.parent.mkdir(parents=True, exist_ok=True)
@@ -651,12 +651,12 @@ def _record_kyohaku_download_failure(
 
 
 @legacy_tools_action(
-    description='收集当前 LOC 搜索结果页中的详情页标题和 URL，保存为可恢复的 browseruse_agent_data/loc_result_queue.json 队列，避免滚动和重复点击。',
+    description='收集当前 LOC 搜索结果页中的详情页标题和 URL,保存为可恢复的 browseruse_agent_data/loc_result_queue.json 队列,避免滚动和重复点击.',
     param_model=CollectLocResultsParams,
 )
 async def collect_loc_result_queue(params: CollectLocResultsParams, browser_session):
     """
-    从当前 LOC 搜索结果页提取详情页 URL 队列。
+    从当前 LOC 搜索结果页提取详情页 URL 队列.
     """
     try:
         js_code = '''
@@ -738,12 +738,12 @@ async def collect_loc_result_queue(params: CollectLocResultsParams, browser_sess
 
 
 @legacy_tools_action(
-    description='从 browseruse_agent_data/loc_result_queue.json 中返回下一个 pending 的 LOC item，并可自动标记为 in_progress；不要让 agent 直接读 JSON 文件。',
+    description='从 browseruse_agent_data/loc_result_queue.json 中返回下一个 pending 的 LOC item,并可自动标记为 in_progress;不要让 agent 直接读 JSON 文件.',
     param_model=GetNextLocQueueItemParams,
 )
 async def get_next_loc_queue_item(params: GetNextLocQueueItemParams):
     """
-    返回下一个待处理队列项，避免 agent 直接读文件失败后回退到手动点击页面。
+    返回下一个待处理队列项,避免 agent 直接读文件失败后回退到手动点击页面.
     """
     try:
         queue_file = _queue_file_path(params.queue_filename)
@@ -787,12 +787,12 @@ async def get_next_loc_queue_item(params: GetNextLocQueueItemParams):
 
 
 @legacy_tools_action(
-    description='把 LOC 队列中的指定 URL 标记为 pending/in_progress/downloaded/skipped/failed，并清理或写入 error；用于无 TIFF、页面异常或手动跳过后的状态同步。',
+    description='把 LOC 队列中的指定 URL 标记为 pending/in_progress/downloaded/skipped/failed,并清理或写入 error;用于无 TIFF,页面异常或手动跳过后的状态同步.',
     param_model=MarkLocQueueItemParams,
 )
 async def mark_loc_queue_item(params: MarkLocQueueItemParams):
     """
-    显式更新队列项状态，避免无 TIFF 项被反复处理。
+    显式更新队列项状态,避免无 TIFF 项被反复处理.
     """
     allowed_statuses = {'pending', 'in_progress', 'downloaded', 'skipped', 'failed'}
     status = params.status.strip().lower()
@@ -834,7 +834,7 @@ async def mark_loc_queue_item(params: MarkLocQueueItemParams):
             'title': target_url,
             'url': target_url,
             'status': status,
-            'error': params.error or 'URL 不在当前队列中，已追加状态记录以避免重复处理',
+            'error': params.error or 'URL 不在当前队列中,已追加状态记录以避免重复处理',
             'updated_at': datetime.now(timezone.utc).isoformat(),
         })
         _write_json_list(queue_file, items)
@@ -842,10 +842,10 @@ async def mark_loc_queue_item(params: MarkLocQueueItemParams):
             'title': target_url,
             'url': target_url,
             'status': status,
-            'error': params.error or 'URL 不在当前队列中，已追加状态记录以避免重复处理',
+            'error': params.error or 'URL 不在当前队列中,已追加状态记录以避免重复处理',
             'counts': _queue_status_counts(items),
         }
-        msg = '✅ URL 不在队列中，已追加并标记状态:\n' + json_module.dumps(payload, ensure_ascii=False, indent=2)
+        msg = '✅ URL 不在队列中,已追加并标记状态:\n' + json_module.dumps(payload, ensure_ascii=False, indent=2)
         return ActionResult(
             extracted_content=msg,
             include_in_memory=True,
@@ -856,12 +856,12 @@ async def mark_loc_queue_item(params: MarkLocQueueItemParams):
 
 
 @legacy_tools_action(
-	description='收集当前 Kyohaku 搜索结果页中的藏品详情页标题和 URL，保存为可恢复的 browseruse_agent_data/kyohaku_result_queue.json 队列，避免靠滚动反复寻找结果。',
+	description='收集当前 Kyohaku 搜索结果页中的藏品详情页标题和 URL,保存为可恢复的 browseruse_agent_data/kyohaku_result_queue.json 队列,避免靠滚动反复寻找结果.',
 	param_model=CollectKyohakuResultsParams,
 )
 async def collect_kyohaku_result_queue(params: CollectKyohakuResultsParams, browser_session):
 	"""
-	从当前 Kyohaku 搜索结果页提取藏品详情页 URL 队列。
+	从当前 Kyohaku 搜索结果页提取藏品详情页 URL 队列.
 	"""
 	try:
 		js_code = r'''
@@ -949,12 +949,12 @@ async def collect_kyohaku_result_queue(params: CollectKyohakuResultsParams, brow
 
 
 @legacy_tools_action(
-	description='从 browseruse_agent_data/kyohaku_result_queue.json 中返回下一个 pending 的 Kyohaku 藏品，并可自动标记为 in_progress。',
+	description='从 browseruse_agent_data/kyohaku_result_queue.json 中返回下一个 pending 的 Kyohaku 藏品,并可自动标记为 in_progress.',
 	param_model=GetNextKyohakuQueueItemParams,
 )
 async def get_next_kyohaku_queue_item(params: GetNextKyohakuQueueItemParams):
 	"""
-	返回下一个待处理 Kyohaku 队列项。
+	返回下一个待处理 Kyohaku 队列项.
 	"""
 	try:
 		queue_file = _queue_file_path(params.queue_filename)
@@ -998,12 +998,12 @@ async def get_next_kyohaku_queue_item(params: GetNextKyohakuQueueItemParams):
 
 
 @legacy_tools_action(
-	description='把 Kyohaku 队列中的指定 URL 标记为 pending/in_progress/downloaded/skipped/failed，并清理或写入 error。',
+	description='把 Kyohaku 队列中的指定 URL 标记为 pending/in_progress/downloaded/skipped/failed,并清理或写入 error.',
 	param_model=MarkKyohakuQueueItemParams,
 )
 async def mark_kyohaku_queue_item(params: MarkKyohakuQueueItemParams):
 	"""
-	显式更新 Kyohaku 队列项状态。
+	显式更新 Kyohaku 队列项状态.
 	"""
 	allowed_statuses = {'pending', 'in_progress', 'downloaded', 'skipped', 'failed'}
 	status = params.status.strip().lower()
@@ -1044,7 +1044,7 @@ async def mark_kyohaku_queue_item(params: MarkKyohakuQueueItemParams):
 			'title': target_url,
 			'url': target_url,
 			'status': status,
-			'error': params.error or 'URL 不在当前队列中，已追加状态记录以避免重复处理',
+			'error': params.error or 'URL 不在当前队列中,已追加状态记录以避免重复处理',
 			'updated_at': datetime.now(timezone.utc).isoformat(),
 		})
 		_write_json_list(queue_file, items)
@@ -1052,10 +1052,10 @@ async def mark_kyohaku_queue_item(params: MarkKyohakuQueueItemParams):
 			'title': target_url,
 			'url': target_url,
 			'status': status,
-			'error': params.error or 'URL 不在当前队列中，已追加状态记录以避免重复处理',
+			'error': params.error or 'URL 不在当前队列中,已追加状态记录以避免重复处理',
 			'counts': _queue_status_counts(items),
 		}
-		msg = '✅ URL 不在队列中，已追加并标记状态:\n' + json_module.dumps(payload, ensure_ascii=False, indent=2)
+		msg = '✅ URL 不在队列中,已追加并标记状态:\n' + json_module.dumps(payload, ensure_ascii=False, indent=2)
 		return ActionResult(
 			extracted_content=msg,
 			include_in_memory=True,
@@ -1066,12 +1066,12 @@ async def mark_kyohaku_queue_item(params: MarkKyohakuQueueItemParams):
 
 
 @legacy_tools_action(
-    description='合并并清理 LOC 队列文件，过滤无关条目，按 download_record.jsonl 和 image 目录重建下载状态、标题和清单。',
+    description='合并并清理 LOC 队列文件,过滤无关条目,按 download_record.jsonl 和 image 目录重建下载状态,标题和清单.',
     param_model=RebuildLocDownloadStateParams,
 )
 async def rebuild_loc_download_state(params: RebuildLocDownloadStateParams):
     """
-    修复多轮失败/续跑后产生的队列污染和 title/download_record/image 不一致问题。
+    修复多轮失败/续跑后产生的队列污染和 title/download_record/image 不一致问题.
     """
     try:
         data_dir = AGENT_DATA_DIR
@@ -1230,7 +1230,7 @@ def _resolve_kyohaku_image_url(params_image_url: str, page_url: str, page_data: 
         return urljoin(page_url or page_data.get('page_url', ''), params_image_url.strip()), candidates
 
     if not candidates:
-        raise RuntimeError('当前页面未找到 /art_images/ 原图 URL；请先打开详情页大图或图片列表。')
+        raise RuntimeError('当前页面未找到 /art_images/ 原图 URL;请先打开详情页大图或图片列表.')
     if image_index >= len(candidates):
         raise RuntimeError(f'图片索引 {image_index} 超出范围，当前找到 {len(candidates)} 个原图候选。')
     return candidates[image_index], candidates
@@ -1366,15 +1366,15 @@ async def _save_kyohaku_by_method(
 
 @legacy_tools_action(
     description=(
-        '京都国立博物馆/KNMDB 专用：优先从当前页面 DOM 自动提取 /art_images/ 原图 URL，'
-        '用 Python 直接下载到 image 目录，并同步写入 image_record.jsonl、title.txt 和 temple_photo_info.md。'
-        '优先使用这个工具，只有找不到原图 URL 时才退回 smart_screenshot。'
+        '京都国立博物馆/KNMDB 专用:优先从当前页面 DOM 自动提取 /art_images/ 原图 URL,'
+        '用 Python 直接下载到 image 目录,并同步写入 image_record.jsonl,title.txt 和 temple_photo_info.md.'
+        '优先使用这个工具,只有找不到原图 URL 时才退回 smart_screenshot.'
     ),
     param_model=DownloadKyohakuImageParams,
 )
 async def download_kyohaku_image(params: DownloadKyohakuImageParams, browser_session):
     """
-    直接下载 KNMDB 原图并记录元数据，避免截图裁剪包含边框、按钮或页面背景。
+    直接下载 KNMDB 原图并记录元数据,避免截图裁剪包含边框,按钮或页面背景.
     """
     try:
         page_data = await _extract_kyohaku_image_candidates(browser_session)
@@ -1478,22 +1478,22 @@ async def download_kyohaku_image(params: DownloadKyohakuImageParams, browser_ses
 
 @legacy_tools_action(
     description=(
-        'Kyohaku 当前藏品批量下载工具：在当前藏品详情页或图片列表页一次性提取该藏品全部 /art_images/ 大图 URL，'
-        '按页面顺序批量保存并写入 image_record.jsonl、title.txt 和 temple_photo_info.md。'
-        '优先用这个工具处理多图藏品，避免 agent 一张张调用或手动猜 URL。'
+        'Kyohaku 当前藏品批量下载工具:在当前藏品详情页或图片列表页一次性提取该藏品全部 /art_images/ 大图 URL,'
+        '按页面顺序批量保存并写入 image_record.jsonl,title.txt 和 temple_photo_info.md.'
+        '优先用这个工具处理多图藏品,避免 agent 一张张调用或手动猜 URL.'
     ),
     param_model=DownloadCurrentKyohakuItemImagesParams,
 )
 async def download_current_kyohaku_item_images(params: DownloadCurrentKyohakuItemImagesParams, browser_session):
     """
-    批量下载当前藏品的全部图片。
+    批量下载当前藏品的全部图片.
     """
     try:
         page_data = await _extract_current_kyohaku_item_image_urls(browser_session)
         page_url = params.page_url.strip() or page_data.get('page_url', '')
         image_urls = [str(url) for url in page_data.get('image_urls', []) if url]
         if not image_urls:
-            return ActionResult(error='当前藏品页面未提取到 /art_images/ 大图 URL；请先打开详情页或“See all available images”。')
+            return ActionResult(error='当前藏品页面未提取到 /art_images/ 大图 URL;请先打开详情页或“See all available images”.')
 
         existing_urls = _existing_recorded_image_urls(params.record_filename) if params.skip_existing_urls else set()
         successes: list[dict] = []
@@ -1641,16 +1641,16 @@ async def download_current_kyohaku_item_images(params: DownloadCurrentKyohakuIte
 
 @legacy_tools_action(
     description=(
-        'Kyohaku 图片浏览器会话保存工具：作为“右键另存为”的自动化等价方案。'
-        '它不操作不稳定的系统右键菜单，而是在当前浏览器页面上下文中 fetch 图片 Blob，'
-        '使用浏览器会话/Cookie 获取图片字节，保存到默认 image 目录，并同步写入记录文件。'
-        '当 download_kyohaku_image 的 Python 直连失败时优先调用；再失败才截图。'
+        'Kyohaku 图片浏览器会话保存工具:作为“右键另存为”的自动化等价方案.'
+        '它不操作不稳定的系统右键菜单,而是在当前浏览器页面上下文中 fetch 图片 Blob,'
+        '使用浏览器会话/Cookie 获取图片字节,保存到默认 image 目录,并同步写入记录文件.'
+        '当 download_kyohaku_image 的 Python 直连失败时优先调用;再失败才截图.'
     ),
     param_model=SaveKyohakuImageViaBrowserParams,
 )
 async def save_kyohaku_image_via_browser(params: SaveKyohakuImageViaBrowserParams, browser_session):
     """
-    使用浏览器页面上下文保存图片，等价于借助浏览器当前会话执行“另存为”。
+    使用浏览器页面上下文保存图片,等价于借助浏览器当前会话执行“另存为”.
     """
     try:
         page_data = await _extract_kyohaku_image_candidates(browser_session)
@@ -1714,16 +1714,16 @@ async def save_kyohaku_image_via_browser(params: SaveKyohakuImageViaBrowserParam
 
 @legacy_tools_action(
     description=(
-        'Kyohaku 截图兜底工具：先打开 /art_images/ 原图页（如果提供 image_url），'
-        '能直接获取原始图片字节时优先保存原始格式；否则只截取页面中最大的可见 <img> 元素，'
-        '自动裁掉黑色或白色背景/边框，并尽量沿用原图扩展名高质量重编码，'
-        '最后同步写入 image_record.jsonl、title.txt 和 temple_photo_info.md。'
+        'Kyohaku 截图兜底工具:先打开 /art_images/ 原图页(如果提供 image_url),'
+        '能直接获取原始图片字节时优先保存原始格式;否则只截取页面中最大的可见 <img> 元素,'
+        '自动裁掉黑色或白色背景/边框,并尽量沿用原图扩展名高质量重编码,'
+        '最后同步写入 image_record.jsonl,title.txt 和 temple_photo_info.md.'
     ),
     param_model=CleanKyohakuScreenshotParams,
 )
 async def clean_kyohaku_screenshot(params: CleanKyohakuScreenshotParams, browser_session):
     """
-    在原图页做精确截图；能保存原始字节时不截图，必须截图时避免把黑色/白色查看器背景或边框截进去。
+    在原图页做精确截图;能保存原始字节时不截图,必须截图时避免把黑色/白色查看器背景或边框截进去.
     """
     try:
         native_download_error = ''
@@ -1850,11 +1850,11 @@ class SelectDownloadFormatParams(BaseModel):
     preferred_format: str = "TIFF"  # 优先选择的格式: TIFF, JPEG, GIF, JP2, JPEG2000
     fallback_formats: list[str] = Field(
         default_factory=list,
-        description='当 preferred_format 不可用时依次尝试的备选格式列表；默认不回退',
+        description='当 preferred_format 不可用时依次尝试的备选格式列表;默认不回退',
     )
     image_title: str | None = Field(
         default=None,
-        description='当前图片标题；下载按钮成功点击后会立即追加写入 browseruse_agent_data/title.txt',
+        description='当前图片标题;下载按钮成功点击后会立即追加写入 browseruse_agent_data/title.txt',
     )
     write_title_on_success: bool = Field(
         default=True,
@@ -1862,7 +1862,7 @@ class SelectDownloadFormatParams(BaseModel):
     )
     direct_download: bool = Field(
         default=True,
-        description='找到 TIFF URL 后是否由 Python 直接下载，避免浏览器下载状态采集卡死',
+        description='找到 TIFF URL 后是否由 Python 直接下载,避免浏览器下载状态采集卡死',
     )
     download_timeout_seconds: int = Field(
         default=180,
@@ -1873,24 +1873,24 @@ class SelectDownloadFormatParams(BaseModel):
 
 
 @legacy_tools_action(
-    description='在LOC网站详情页中自动找到 TIFF 下载 URL；默认用 Python 直接下载到 image 目录，成功后写 title.txt 和 download_record.jsonl。',
+    description='在LOC网站详情页中自动找到 TIFF 下载 URL;默认用 Python 直接下载到 image 目录,成功后写 title.txt 和 download_record.jsonl.',
     param_model=SelectDownloadFormatParams,
 )
 async def select_download_format(params: SelectDownloadFormatParams, browser_session):
     """
-    通过JavaScript直接操作LOC网站的下载格式<select>元素。
+    通过JavaScript直接操作LOC网站的下载格式<select>元素.
 
-    工作流程：
+    工作流程:
     1. 在页面中查找 id 以 'select-resource' 开头的 <select> 元素
-    2. 读取所有 <option>，通过 data-file-download 属性匹配目标格式
+    2. 读取所有 <option>,通过 data-file-download 属性匹配目标格式
     3. 设置 selectedIndex 并触发 change 事件
-    4. 默认用 Python 直接下载文件，避免浏览器下载 tab / .crdownload 影响状态采集
+    4. 默认用 Python 直接下载文件,避免浏览器下载 tab / .crdownload 影响状态采集
     5. 下载成功后立即把图片标题写入 browseruse_agent_data/title.txt
 
-    参数：
-    - preferred_format: 优先选择的格式（默认 TIFF），不区分大小写
+    参数:
+    - preferred_format: 优先选择的格式(默认 TIFF),不区分大小写
     - fallback_formats: preferred_format 不可用时依次尝试的备选格式
-    - image_title: 当前图片标题；为空时自动使用 document.title
+    - image_title: 当前图片标题;为空时自动使用 document.title
     - write_title_on_success: 下载成功后是否写入 title.txt
     - direct_download: 是否用 Python 直接下载
     """
@@ -1907,7 +1907,7 @@ async def select_download_format(params: SelectDownloadFormatParams, browser_ses
         js_code = '''
         (function() {
             try {
-                // 查找下载格式的 select 元素（id 以 select-resource 开头）
+                // 查找下载格式的 select 元素(id 以 select-resource 开头)
                 const selects = document.querySelectorAll('select[id^="select-resource"]');
                 if (selects.length === 0) {
                     return {
@@ -1938,7 +1938,7 @@ async def select_download_format(params: SelectDownloadFormatParams, browser_ses
                     value: opt.value
                 }));
 
-                // 优先按 requestedFormats 顺序匹配，单个格式内仍优先选择最后一个（通常尺寸最大）
+                // 优先按 requestedFormats 顺序匹配,单个格式内仍优先选择最后一个(通常尺寸最大)
                 let targetIdx = -1;
                 let selectedRequestedFormat = '';
                 for (const requestedFormat of requestedFormats) {
@@ -1972,7 +1972,7 @@ async def select_download_format(params: SelectDownloadFormatParams, browser_ses
                 select.selectedIndex = targetIdx;
                 select.dispatchEvent(new Event('change', { bubbles: true }));
 
-                // 查找 Go 按钮；直接下载模式下不点击，避免打开下载 tab
+                // 查找 Go 按钮;直接下载模式下不点击,避免打开下载 tab
                 const container = select.closest('.input-group-small') || select.parentElement;
                 let goButton = container ? container.querySelector('button') : null;
                 if (!goButton) {
@@ -2056,7 +2056,7 @@ async def select_download_format(params: SelectDownloadFormatParams, browser_ses
                     'error': '缺少下载 URL',
                 })
                 _update_result_queue_status(page_url, 'failed', '缺少下载 URL')
-                return ActionResult(error='已找到格式但缺少下载 URL，无法直接下载')
+                return ActionResult(error='已找到格式但缺少下载 URL,无法直接下载')
 
             async with DOWNLOAD_LOCK:
                 output_dir = IMAGE_DIR
@@ -2139,11 +2139,11 @@ async def select_download_format(params: SelectDownloadFormatParams, browser_ses
             if record_file_path:
                 msg += f"，下载记录已写入 {record_file_path}"
         elif clicked:
-            msg += "，并已点击Go按钮开始下载"
+            msg += ",并已点击Go按钮开始下载"
             if title_file_path:
                 msg += f"，标题已写入 {title_file_path}"
         else:
-            msg += "，但未找到Go按钮，请手动点击"
+            msg += ",但未找到Go按钮,请手动点击"
 
         return ActionResult(
             extracted_content=msg,

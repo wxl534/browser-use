@@ -1,9 +1,9 @@
 """
-International Dunhuang Programme (idp.bl.uk) 适配器。
+International Dunhuang Programme (idp.bl.uk) 适配器.
 
 把原先散落在 ``tools_registry.py`` 里的 IDP 特定 URL / DOM / IIIF manifest
-逻辑收拢到本文件。``core.batch_download`` 调度器在运行时只跟
-``IDPAdapter`` 的方法打交道，不再硬编码 IDP。
+逻辑收拢到本文件.``core.batch_download`` 调度器在运行时只跟
+``IDPAdapter`` 的方法打交道,不再硬编码 IDP.
 """
 from __future__ import annotations
 
@@ -75,12 +75,12 @@ def _build_search_extract_js(start_index: int, max_items: int) -> str:
 
 
 class IDPAdapter(IIIFAdapter):
-    """idp.bl.uk 的 SiteAdapter 实现。"""
+    """idp.bl.uk 的 SiteAdapter 实现."""
 
     site_id = 'idp'
 
-    # 兼容旧文件名：idp_progress.json / idp_page_progress.json / idp_empty_page_events.jsonl
-    # 由基类按 site_id 自动生成。
+    # 兼容旧文件名:idp_progress.json / idp_page_progress.json / idp_empty_page_events.jsonl
+    # 由基类按 site_id 自动生成.
 
     def default_host_suffixes(self) -> list[str]:
         return ['idp.bl.uk', 'data.idp.bl.uk', 'iiif.io']

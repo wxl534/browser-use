@@ -55,7 +55,7 @@ async def test_no_budget_warning_below_75_percent():
 
 
 async def test_no_budget_warning_on_last_step():
-	"""No budget warning on the last step — _force_done_after_last_step handles that."""
+	"""No budget warning on the last step - _force_done_after_last_step handles that."""
 	llm = create_mock_llm()
 	agent = Agent(task='Test task', llm=llm)
 
@@ -94,7 +94,7 @@ async def test_budget_warning_exact_threshold():
 
 
 async def test_budget_warning_just_below_threshold():
-	"""No warning at 74% — just below threshold."""
+	"""No warning at 74% - just below threshold."""
 	llm = create_mock_llm()
 	agent = Agent(task='Test task', llm=llm)
 

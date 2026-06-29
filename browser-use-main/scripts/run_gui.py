@@ -1,14 +1,14 @@
 """
-本地桌面前端（零依赖，纯 tkinter）：在一个窗口里填写必要信息后启动
-auto_run_until_target.py 这个外部 supervisor，实时显示日志与进度，并可一键停止。
+本地桌面前端(零依赖,纯 tkinter):在一个窗口里填写必要信息后启动
+runner.py 这个外部 supervisor,实时显示日志与进度,并可一键停止.
 
-设计原则：本前端只做“参数填写 + 启动 + 实时进度/日志 + 停止”这层，所有业务逻辑
-（归档旧缓存、改写 task.md、断点续跑等）仍由 supervisor 通过 --keyword/--target/
---resume/--new-run 等参数完成，避免在前端重复实现而产生分叉。
+设计原则:本前端只做“参数填写 + 启动 + 实时进度/日志 + 停止”这层,所有业务逻辑
+(归档旧缓存,改写 task.md,断点续跑等)仍由 supervisor 通过 --keyword/--target/
+--resume/--new-run 等参数完成,避免在前端重复实现而产生分叉.
 
-运行：用装有 browser-use 依赖的那个 Python 启动本文件，例如
+运行:用装有 browser-use 依赖的那个 Python 启动本文件,例如
     python run_gui.py
-窗口里的“Python 解释器”默认就是当前解释器（sys.executable），子进程会用它来跑。
+窗口里的“Python 解释器”默认就是当前解释器(sys.executable),子进程会用它来跑.
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-# 复用 supervisor / 配置脚本里的轻量函数（均为标准库实现，导入不会拉起 browser_use）。
-from auto_run_until_target import (
+# 复用 supervisor / 配置脚本里的轻量函数(均为标准库实现,导入不会拉起 browser_use).
+from runner import (
     LLM_BLOCKED_EXIT_CODE,
     detect_search_keyword,
     read_downloaded_count,
@@ -33,7 +33,7 @@ from auto_run_until_target import (
 from configure_resume_target import DEFAULT_CACHE_DIR, TASK_FILE
 
 BASE_DIR = Path(__file__).resolve().parent
-SUPERVISOR = BASE_DIR / 'auto_run_until_target.py'
+SUPERVISOR = BASE_DIR / 'runner.py'
 DEFAULT_BASE_URL = 'https://openapi.seu.edu.cn/v1'
 
 EXIT_MARKER = '__EXIT__'
@@ -69,7 +69,7 @@ class RunnerGUI:
         self._build_form()
         self._build_console()
 
-        # 周期性把后台线程的输出刷到界面，并轮询进度。
+        # 周期性把后台线程的输出刷到界面,并轮询进度.
         self.root.after(120, self._drain_log)
         self.root.after(1500, self._poll_progress)
 
@@ -93,12 +93,12 @@ class RunnerGUI:
         self.var_api_key = tk.StringVar(value=os.environ.get('OPENAI_API_KEY', ''))
         self.var_base_url = tk.StringVar(value=os.environ.get('OPENAI_BASE_URL', DEFAULT_BASE_URL))
         self.var_python = tk.StringVar(value=sys.executable)
-        # 反爬：真实 Chrome profile + 可选代理（绕过 Cloudflare 人机验证）
+        # 反爬:真实 Chrome profile + 可选代理(绕过 Cloudflare 人机验证)
         self.var_chrome_exe = tk.StringVar(value=os.environ.get('IDP_CHROME_EXECUTABLE', ''))
         self.var_chrome_user_data = tk.StringVar(value=os.environ.get('IDP_CHROME_USER_DATA_DIR', ''))
         self.var_chrome_profile = tk.StringVar(value=os.environ.get('IDP_CHROME_PROFILE_DIRECTORY', 'Default'))
         self.var_proxy_server = tk.StringVar(value=os.environ.get('IDP_PROXY_SERVER', ''))
-        # 方案C：Scrapling 自动取 cf_clearance 通行证（相对探测同级 Scrapling/.venv，避免硬编码绝对路径）
+        # 方案C:Scrapling 自动取 cf_clearance 通行证(相对探测同级 Scrapling/.venv,避免硬编码绝对路径)
         _guess_scrapling = BASE_DIR.parent.parent / 'Scrapling' / '.venv' / 'Scripts' / 'python.exe'
         self.var_scrapling_py = tk.StringVar(
             value=os.environ.get('IDP_SCRAPLING_PYTHON', '') or (str(_guess_scrapling) if _guess_scrapling.exists() else '')
@@ -148,7 +148,7 @@ class RunnerGUI:
         self.btn_stop.pack(side='left', padx=(8, 0))
         ttk.Button(btns, text='清空日志', command=self._clear_log).pack(side='left', padx=(8, 0))
 
-        self.var_status = tk.StringVar(value='状态：空闲    进度：- / -')
+        self.var_status = tk.StringVar(value='状态:空闲    进度:- / -')
         ttk.Label(self.root, textvariable=self.var_status, anchor='w').pack(fill='x', padx=12, pady=(0, 4))
 
     def _build_console(self) -> None:
@@ -204,7 +204,7 @@ class RunnerGUI:
     def _validate(self) -> dict | None:
         keyword = self.var_keyword.get().strip()
         if not keyword:
-            messagebox.showerror('参数错误', '搜索关键词不能为空。')
+            messagebox.showerror('参数错误', '搜索关键词不能为空.')
             return None
 
         def as_int(var: tk.StringVar, name: str, minimum: int) -> int | None:
@@ -283,10 +283,10 @@ class RunnerGUI:
             env['OPENAI_BASE_URL'] = base_url
         env['PYTHONIOENCODING'] = 'utf-8'
         env['PYTHONUNBUFFERED'] = '1'
-        # supervisor 由前端托管，子进程不再自行监听 stdin。
+        # supervisor 由前端托管,子进程不再自行监听 stdin.
         env['BROWSER_USE_DISABLE_INPUT_MONITOR'] = '1'
         env['BROWSER_USE_IMAGE_DOWNLOAD_CONCURRENCY'] = str(cfg['concurrency'])
-        # 反爬：真实 Chrome profile + 可选代理（main.py 的 build_browser 读取这些环境变量）。
+        # 反爬:真实 Chrome profile + 可选代理(main.py 的 build_browser 读取这些环境变量).
         if cfg['chrome_exe']:
             env['IDP_CHROME_EXECUTABLE'] = cfg['chrome_exe']
         if cfg['chrome_user_data']:
@@ -295,7 +295,7 @@ class RunnerGUI:
             env['IDP_CHROME_PROFILE_DIRECTORY'] = cfg['chrome_profile']
         if cfg['proxy_server']:
             env['IDP_PROXY_SERVER'] = cfg['proxy_server']
-        # 方案C：自动取/刷新 cf_clearance 通行证（auto_run + fetch_cf_cookie.py 读取这些环境变量）。
+        # 方案C:自动取/刷新 cf_clearance 通行证(auto_run + fetch_cf_cookie.py 读取这些环境变量).
         if cfg['scrapling_py']:
             env['IDP_SCRAPLING_PYTHON'] = cfg['scrapling_py']
         if cfg['cf_url']:
@@ -345,7 +345,7 @@ class RunnerGUI:
     def on_stop(self) -> None:
         if self.proc is None:
             return
-        self._append('■ 正在停止（终止 supervisor 及其全部子进程）...')
+        self._append('■ 正在停止(终止 supervisor 及其全部子进程)...')
         try:
             terminate_process_tree(self.proc)
         except Exception as exc:
@@ -361,15 +361,15 @@ class RunnerGUI:
         if code == LLM_BLOCKED_EXIT_CODE:
             messagebox.showwarning(
                 'LLM 端点被拦截',
-                '子进程报告 LLM 端点被网关/门户拦截（退出码 3）。\n'
-                '请确认已连接校园网/VPN，且 OPENAI_API_KEY / OPENAI_BASE_URL 正确后重试。',
+                '子进程报告 LLM 端点被网关/门户拦截(退出码 3).\n'
+                '请确认已连接校园网/VPN,且 OPENAI_API_KEY / OPENAI_BASE_URL 正确后重试.',
             )
         elif code == 0:
-            messagebox.showinfo('完成', '已达到目标数量，任务完成。')
+            messagebox.showinfo('完成', '已达到目标数量,任务完成.')
 
     def on_close(self) -> None:
         if self.proc is not None:
-            if not messagebox.askyesno('确认退出', '任务仍在运行，退出将停止它。确定吗？'):
+            if not messagebox.askyesno('确认退出', '任务仍在运行,退出将停止它.确定吗?'):
                 return
             try:
                 terminate_process_tree(self.proc)
@@ -387,3 +387,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+

@@ -185,7 +185,7 @@ class HTMLSerializer:
 		has_tbody = 'tbody' in child_tags
 
 		if has_thead or not child_tags:
-			# Already normalized or empty — serialize normally
+			# Already normalized or empty - serialize normally
 			parts = []
 			for child in children:
 				child_html = self.serialize(child, depth + 1)
@@ -206,7 +206,7 @@ class HTMLSerializer:
 				break  # Only check the first <tr>
 
 		if first_tr is None:
-			# No header row detected — serialize normally
+			# No header row detected - serialize normally
 			parts = []
 			for child in children:
 				child_html = self.serialize(child, depth + 1)

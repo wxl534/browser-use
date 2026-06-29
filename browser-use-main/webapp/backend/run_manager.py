@@ -1,11 +1,11 @@
-"""爬虫 supervisor 的进程托管 + 实时日志广播（供 Web 控制台用）。
+"""爬虫 supervisor 的进程托管 + 实时日志广播(供 Web 控制台用).
 
-职责边界与 run_gui.py 一致：本模块只负责"用参数启动 auto_run_until_target.py
-子进程、转发它的 stdout、按需停止"，所有业务逻辑（归档、改写 task.md、断点续跑、
-方案C 取证）仍由 supervisor 自己用命令行参数完成，前端不重复实现。
+职责边界与 run_gui.py 一致:本模块只负责"用参数启动 runner.py
+子进程,转发它的 stdout,按需停止",所有业务逻辑(归档,改写 task.md,断点续跑,
+方案C 取证)仍由 supervisor 自己用命令行参数完成,前端不重复实现.
 
-日志通过 asyncio 队列广播给所有 SSE 订阅者；后台读取线程用 call_soon_threadsafe
-把行投递到主事件循环，避免线程/协程竞争。
+日志通过 asyncio 队列广播给所有 SSE 订阅者;后台读取线程用 call_soon_threadsafe
+把行投递到主事件循环,避免线程/协程竞争.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from typing import Any
 from . import paths
 
 try:
-    from auto_run_until_target import LLM_BLOCKED_EXIT_CODE, terminate_process_tree
+    from runner import LLM_BLOCKED_EXIT_CODE, terminate_process_tree
 except Exception:  # pragma: no cover - 仅在 import 异常环境下退化
     LLM_BLOCKED_EXIT_CODE = 3
 
@@ -196,9 +196,9 @@ class RunManager:
             self._trigger_import()
 
     def _trigger_import(self) -> None:
-        """任务结束后把最新 image_record.jsonl 导入 SQLite，保证前端看到最新数据。"""
+        """任务结束后把最新 image_record.jsonl 导入 SQLite,保证前端看到最新数据."""
         try:
-            from auto_run_until_target import import_sqlite
+            from runner import import_sqlite
             import_sqlite(paths.CACHE_DIR)
             self._emit('[webapp] 已刷新 SQLite 目录数据')
         except Exception as exc:  # noqa: BLE001
@@ -208,7 +208,7 @@ class RunManager:
         with self._lock:
             if not self.running or self._proc is None:
                 return {'ok': False, 'error': '当前没有运行中的任务'}
-            self._emit('■ 正在停止（终止 supervisor 及其全部子进程）...')
+            self._emit('■ 正在停止(终止 supervisor 及其全部子进程)...')
             try:
                 terminate_process_tree(self._proc)
             except Exception as exc:  # noqa: BLE001
@@ -217,3 +217,4 @@ class RunManager:
 
 
 manager = RunManager()
+

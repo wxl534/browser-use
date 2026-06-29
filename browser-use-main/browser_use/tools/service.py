@@ -80,16 +80,16 @@ def _detect_image_boundaries(screenshot_bytes: bytes, min_area: int = 10000,
 	
 	Args:
 		screenshot_bytes: 截图的字节数据
-		min_area: 最小图片区域面积（像素）
+		min_area: 最小图片区域面积(像素)
 		edge_threshold_low: Canny 边缘检测低阈值
 		edge_threshold_high: Canny 边缘检测高阈值
 	
 	Returns:
-		包含图片边界信息的列表：
+		包含图片边界信息的列表:
 		[{'x': x, 'y': y, 'width': w, 'height': h, 'area': area}, ...]
 	"""
 	try:
-		# 延迟导入依赖（避免硬依赖）
+		# 延迟导入依赖(避免硬依赖)
 		try:
 			import io
 
@@ -98,7 +98,7 @@ def _detect_image_boundaries(screenshot_bytes: bytes, min_area: int = 10000,
 			from PIL import Image
 		except ImportError as e:
 			logger.warning(f"⚠️ 图片边界检测需要安装依赖：{e}")
-			logger.warning("💡 请运行：uv add opencv-python pillow numpy")
+			logger.warning("💡 请运行:uv add opencv-python pillow numpy")
 			return []
 		
 		# 将字节转换为 PIL Image
@@ -128,7 +128,7 @@ def _detect_image_boundaries(screenshot_bytes: bytes, min_area: int = 10000,
 			x, y, w, h = cv2.boundingRect(contour)
 			area = w * h
 			
-			# 过滤太小的区域（可能是噪点）
+			# 过滤太小的区域(可能是噪点)
 			if area >= min_area:
 				image_regions.append({
 					'x': x,
@@ -138,7 +138,7 @@ def _detect_image_boundaries(screenshot_bytes: bytes, min_area: int = 10000,
 					'area': area
 				})
 		
-		# 按面积排序，返回最大的几个区域
+		# 按面积排序,返回最大的几个区域
 		image_regions.sort(key=lambda x: x['area'], reverse=True)
 		return image_regions[:10]  # 返回最大的 10 个图片区域
 	
@@ -772,7 +772,7 @@ class Tools(Generic[Context]):
 				if not has_sensitive_data and actual_value is not None and actual_value != params.text:
 					msg += f"\n⚠️ Note: the field's actual value '{actual_value}' differs from typed text '{params.text}'. The page may have reformatted or autocompleted your input."
 
-				# Check for autocomplete/combobox field — add mechanical delay for dropdown
+				# Check for autocomplete/combobox field - add mechanical delay for dropdown
 				if _is_autocomplete_field(node):
 					msg += '\n💡 This is an autocomplete field. Wait for suggestions to appear, then click the correct suggestion instead of pressing Enter.'
 					# Only delay for true JS-driven autocomplete (combobox / aria-autocomplete),
@@ -1506,7 +1506,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 			browser_session: BrowserSession,
 			file_system: FileSystem,
 		):
-			"""智能截图：自动识别并裁剪图片区域"""
+			"""智能截图:自动识别并裁剪图片区域"""
 			try:
 				# 1. 截取完整页面
 				screenshot_bytes = await browser_session.take_screenshot(full_page=params.full_page)
@@ -1521,7 +1521,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 				
 				if not image_regions:
 					return ActionResult(
-						error='未检测到明显的图片区域，建议使用普通 screenshot 工具',
+						error='未检测到明显的图片区域,建议使用普通 screenshot 工具',
 						extracted_content='No images detected'
 					)
 				
@@ -2041,10 +2041,10 @@ Context: {context}"""
 		)
 		async def evaluate(code: str, browser_session: BrowserSession):
 			# Execute JavaScript with proper error handling and promise support
-			# 这些是本项目的自定义 Python tool action，不是浏览器 JS 函数。弱模型常误把它们
-			# 包进 evaluate() 当 JS 执行 → "Uncaught ReferenceError"，连续失败后放弃逐 item 流程
-			# 改为手动点击，严重拖慢下载。这里拦截并明确提示「作为独立 tool action 直接调用」，
-			# 让模型下一步立刻自我纠正。名称均不与任何 DOM/JS 内置 API 冲突。
+			# 这些是本项目的自定义 Python tool action,不是浏览器 JS 函数.弱模型常误把它们
+			# 包进 evaluate() 当 JS 执行 → "Uncaught ReferenceError",连续失败后放弃逐 item 流程
+			# 改为手动点击,严重拖慢下载.这里拦截并明确提示「作为独立 tool action 直接调用」,
+			# 让模型下一步立刻自我纠正.名称均不与任何 DOM/JS 内置 API 冲突.
 			custom_tool_pattern = (
 				r'\b(?:next_search_item|download_image_from_url|record_downloaded_image|'
 				r'validate_download_completion|finish_download_task|navigate_idp_search_page|'
@@ -2054,12 +2054,12 @@ Context: {context}"""
 			if re.search(custom_tool_pattern, code or ''):
 				return ActionResult(
 					error=(
-						'禁止通过 evaluate() 调用本项目的自定义工具。'
+						'禁止通过 evaluate() 调用本项目的自定义工具.'
 						'next_search_item / download_image_from_url / record_downloaded_image / '
 						'validate_download_completion / finish_download_task / navigate_idp_search_page / '
 						'download_current_idp_search_page_images / wait_for_human_verification / '
-						'extract_page_to_markdown 都是独立 tool action，'
-						'请直接以 action 形式调用（不要写进 evaluate 的 code 里当 JavaScript 执行）。'
+						'extract_page_to_markdown 都是独立 tool action,'
+						'请直接以 action 形式调用(不要写进 evaluate 的 code 里当 JavaScript 执行).'
 					)
 				)
 

@@ -1,12 +1,12 @@
 """
-共享 HTTP 图片下载池。
+共享 HTTP 图片下载池.
 
-把原先每张图片新建一个 ``aiohttp.ClientSession`` 的写法换成一次性持有的共享会话，
-利用 keep-alive / TLS 复用，并通过 ``asyncio.Semaphore`` 控制并发上限。这里只负责
-"把字节落到磁盘"，SHA-256 / 去重 / JSONL 追加仍由调用方在 ``DOWNLOAD_LOCK`` 内串行执行。
+把原先每张图片新建一个 ``aiohttp.ClientSession`` 的写法换成一次性持有的共享会话,
+利用 keep-alive / TLS 复用,并通过 ``asyncio.Semaphore`` 控制并发上限.这里只负责
+"把字节落到磁盘",SHA-256 / 去重 / JSONL 追加仍由调用方在 ``DOWNLOAD_LOCK`` 内串行执行.
 
-并发上限由环境变量 ``BROWSER_USE_IMAGE_DOWNLOAD_CONCURRENCY`` 控制，默认值
-``DEFAULT_CONCURRENCY``。
+并发上限由环境变量 ``BROWSER_USE_IMAGE_DOWNLOAD_CONCURRENCY`` 控制,默认值
+``DEFAULT_CONCURRENCY``.
 """
 from __future__ import annotations
 
@@ -52,23 +52,23 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
 
 
 def image_download_concurrency() -> int:
-	"""每批下载图片时的并发上限。可通过环境变量覆盖。"""
+	"""每批下载图片时的并发上限.可通过环境变量覆盖."""
 	return _env_int('BROWSER_USE_IMAGE_DOWNLOAD_CONCURRENCY', DEFAULT_CONCURRENCY)
 
 
 def page_delay_seconds() -> float:
-	"""每页批量下载前的节流延时（秒），降低触发 Cloudflare 限流的概率。
+	"""每页批量下载前的节流延时(秒),降低触发 Cloudflare 限流的概率.
 
-	默认 0（不额外等待），可通过环境变量 ``BROWSER_USE_PAGE_DELAY_SECONDS`` 覆盖。
+	默认 0(不额外等待),可通过环境变量 ``BROWSER_USE_PAGE_DELAY_SECONDS`` 覆盖.
 	"""
 	return _env_float('BROWSER_USE_PAGE_DELAY_SECONDS', DEFAULT_PAGE_DELAY_SECONDS, minimum=0.0)
 
 
 class ConcurrentImageDownloader:
 	"""
-	以 async context manager 形式持有一个共享 ``aiohttp.ClientSession``，对外提供
-	并发安全的 ``fetch_to_file``。所有调用都会先抢 ``self._semaphore``，保证不会
-	因为并发过高把站点打挂或把本地连接池打爆。
+	以 async context manager 形式持有一个共享 ``aiohttp.ClientSession``,对外提供
+	并发安全的 ``fetch_to_file``.所有调用都会先抢 ``self._semaphore``,保证不会
+	因为并发过高把站点打挂或把本地连接池打爆.
 	"""
 
 	def __init__(

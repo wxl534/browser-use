@@ -1,12 +1,12 @@
 """
-main.py 功能测试（不调用大模型）
+main.py 功能测试(不调用大模型)
 
-测试策略：
-- 使用临时目录模拟项目结构，不影响真实文件
-- Mock 掉 Browser、ChatOpenAI、Agent，不触发网络请求
+测试策略:
+- 使用临时目录模拟项目结构,不影响真实文件
+- Mock 掉 Browser,ChatOpenAI,Agent,不触发网络请求
 - 逐个验证 main.py 中各个功能模块的正确性
 
-运行方式：
+运行方式:
     python test_main.py
     或
     python -m pytest test_main.py -v
@@ -21,7 +21,7 @@ import tempfile
 import textwrap
 from pathlib import Path
 
-# 项目根目录（用于导入）
+# 项目根目录(用于导入)
 PROJECT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_DIR))
 
@@ -33,7 +33,7 @@ sys.path.insert(0, str(PROJECT_DIR))
 def create_temp_project(tmp: Path):
     """在临时目录中创建最小化的项目结构"""
     # task.md
-    (tmp / 'task.md').write_text('测试任务：下载 3 张图片', encoding='utf-8')
+    (tmp / 'task.md').write_text('测试任务:下载 3 张图片', encoding='utf-8')
 
     # Information.md
     (tmp / 'Information.md').write_text(
@@ -47,7 +47,7 @@ def create_temp_project(tmp: Path):
     # browseruse_agent_data 目录
     (tmp / 'browseruse_agent_data').mkdir()
 
-    # move_images.py（简化版，只打印不做事）
+    # move_images.py(简化版,只打印不做事)
     (tmp / 'move_images.py').write_text(textwrap.dedent("""\
         import sys
         if '--no-confirm' in sys.argv:
@@ -57,7 +57,7 @@ def create_temp_project(tmp: Path):
         print('move_images: done')
     """), encoding='utf-8')
 
-    # rename_images.py（简化版，模拟重命名）
+    # rename_images.py(简化版,模拟重命名)
     (tmp / 'rename_images.py').write_text(textwrap.dedent("""\
         from pathlib import Path
         import sys
@@ -171,7 +171,7 @@ def test_run_python_script():
     """测试 run_python_script 函数"""
     print('\n📋 测试 run_python_script()')
 
-    from main import run_python_script
+    from worker import run_python_script
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -267,7 +267,7 @@ def test_paths():
     """测试所有路径配置的一致性"""
     print('\n📋 测试路径配置')
 
-    from main import BASE_DIR as MAIN_BASE
+    from worker import BASE_DIR as MAIN_BASE
     from tools_registry import BASE_DIR as TOOLS_BASE
 
     # main.py 和 tools_registry.py 的 BASE_DIR 应该相同
@@ -285,8 +285,8 @@ def test_paths():
         else:
             results.fail(f'目录 {subdir}/', '无法创建')
 
-    # task.md 和 Information.md 应存在
-    for fname in ['task.md', 'Information.md']:
+    # task.md 应存在
+    for fname in ['task.md']:
         if (MAIN_BASE / fname).exists():
             results.ok(f'{fname} 存在')
         else:
@@ -299,7 +299,7 @@ def test_task_md_content():
     """测试 task.md 不引用不存在的工具"""
     print('\n📋 测试 task.md 内容')
 
-    from main import BASE_DIR
+    from worker import BASE_DIR
     task_content = (BASE_DIR / 'task.md').read_text(encoding='utf-8')
 
     # 不应引用已删除的 extract_js_object_by_keyword
@@ -336,7 +336,7 @@ def test_task_md_content():
     else:
         results.fail('task.md 图片数量', '未明确要求目标图片数量')
 
-    from main import extract_search_keyword
+    from worker import extract_search_keyword
     search_keyword = extract_search_keyword(task_content, default='')
     if search_keyword and search_keyword in task_content:
         results.ok(f'task.md 明确使用搜索词: {search_keyword}')
@@ -360,7 +360,7 @@ def test_task_md_content():
         results.fail('task.md evaluate 规则', '未明确禁止 evaluate 调自定义工具')
 
     if 'idp.bl.uk' in task_content and ('download_image_from_url' in task_content or 'download_current_idp_search_page_images' in task_content):
-        results.ok('当前 task 是面向 IDP 站点的下载任务（批量或逐 item 模式均可）')
+        results.ok('当前 task 是面向 IDP 站点的下载任务(批量或逐 item 模式均可)')
     else:
         results.fail('IDP 任务识别', '当前 task 缺少 IDP 下载任务标识')
 
@@ -399,23 +399,32 @@ def test_tools_registered():
 
     from tools_registry import registry
 
-    # registry.registry.actions 是一个 dict，key 为 action 名称
+    # registry.registry.actions 是一个 dict,key 为 action 名称
     action_names = list(registry.registry.actions.keys())
     required_actions = [
-        'extract_page_to_markdown',
         'wait_for_human_verification',
-        'record_downloaded_image',
         'validate_download_completion',
         'finish_download_task',
         'navigate_idp_search_page',
         'download_current_idp_search_page_images',
-        'download_image_from_url',
     ]
     for action_name in required_actions:
         if action_name in action_names:
             results.ok(f'{action_name} 已注册')
         else:
             results.fail('工具注册', f'未找到 {action_name}，已注册: {action_names}')
+
+    retired_per_item = [
+        'extract_page_to_markdown',
+        'download_image_from_url',
+        'next_search_item',
+        'record_downloaded_image',
+    ]
+    unexpected_per_item = [name for name in retired_per_item if name in action_names]
+    if not unexpected_per_item:
+        results.ok('逐 item 兜底工具默认不注册(已迁出工作流)')
+    else:
+        results.fail('兜底工具注册', f'默认注册了已退役的逐 item 工具: {unexpected_per_item}')
 
     legacy_actions = [
         'select_download_format',
@@ -436,7 +445,7 @@ def test_tools_registered():
 
 
 def test_plain_border_trimming():
-    """测试截图清理会裁掉纯黑和纯白边框。"""
+    """测试截图清理会裁掉纯黑和纯白边框."""
     print('\n📋 测试黑白边框裁剪')
 
     from PIL import Image, ImageDraw
@@ -462,7 +471,7 @@ def test_plain_border_trimming():
 
 
 def test_kyohaku_method_strategy():
-    """测试连续 5 次同方法成功后会锁定，失败后解除锁定。"""
+    """测试连续 5 次同方法成功后会锁定,失败后解除锁定."""
     print('\n📋 测试 Kyohaku 下载方法策略')
 
     import tools_registry
@@ -506,9 +515,9 @@ def test_run_limit_configuration():
     """测试从 task 提取数量和动态运行限制"""
     print('\n📋 测试运行限制配置')
 
-    from main import build_agent_run_limits, extract_target_image_count
+    from worker import build_agent_run_limits, extract_target_image_count
 
-    task_100 = '下载任务，n = 100 张图片'
+    task_100 = '下载任务,n = 100 张图片'
     target = extract_target_image_count(task_100)
     if target == 100:
         results.ok('extract_target_image_count 可正确识别 n = 100')
@@ -523,7 +532,7 @@ def test_run_limit_configuration():
 
     max_failures, max_actions_per_step, max_steps = build_agent_run_limits(100)
     if 20 <= max_failures <= 80:
-        results.ok('100 张图片任务会限制 max_failures，避免长时间卡死')
+        results.ok('100 张图片任务会限制 max_failures,避免长时间卡死')
     else:
         results.fail('max_failures 配置', f'期望 20-80，得到 {max_failures}')
 
@@ -539,22 +548,22 @@ def test_run_limit_configuration():
 
 
 def test_title_end_marker_removed():
-    """title.txt 已彻底移除：确认 main 不再导出 title 相关函数。"""
+    """title.txt 已彻底移除:确认 main 不再导出 title 相关函数."""
     print('\n📋 测试 title.txt 已移除')
 
-    import main
+    import worker
 
-    if not hasattr(main, 'ensure_title_end_marker') and not hasattr(main, 'count_titles'):
+    if not hasattr(worker, 'ensure_title_end_marker') and not hasattr(worker, 'count_titles'):
         results.ok('main 已移除 ensure_title_end_marker / count_titles')
     else:
         results.fail('title 函数移除', 'main 仍存在 title 相关函数')
 
 
 def test_prepare_runtime_state_resume():
-    """测试 ImagesCache 断点续跑保留状态，重置时完整清空并备份。"""
+    """测试 ImagesCache 断点续跑保留状态,重置时完整清空并备份."""
     print('\n📋 测试断点续跑状态保留')
 
-    from main import prepare_runtime_state
+    from worker import prepare_runtime_state
 
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp) / 'Images' / 'ImagesCache'
@@ -595,10 +604,10 @@ def test_prepare_runtime_state_resume():
 
 
 def test_select_active_cache_dir_archives_old_cache():
-    """测试新运行会把旧 ImagesCache 归档到搜索词目录，并创建新的 ImagesCache。"""
+    """测试新运行会把旧 ImagesCache 归档到搜索词目录,并创建新的 ImagesCache."""
     print('\n📋 测试 ImagesCache 归档')
 
-    from main import select_active_cache_dir
+    from worker import select_active_cache_dir
 
     with tempfile.TemporaryDirectory() as tmp:
         base_dir = Path(tmp)
@@ -615,7 +624,7 @@ def test_select_active_cache_dir_archives_old_cache():
 
 
 def test_move_images_unicode_filename():
-    """测试图片迁移遇到 Windows GBK 难编码文件名时不会中断。"""
+    """测试图片迁移遇到 Windows GBK 难编码文件名时不会中断."""
     print('\n📋 测试 Unicode 文件名图片迁移')
 
     import move_images
@@ -641,10 +650,10 @@ def test_move_images_unicode_filename():
 
 
 def test_idp_progress_resume_context():
-    """测试 IDP 进度文件会驱动续跑页码和页内位置。"""
+    """测试 IDP 进度文件会驱动续跑页码和页内位置."""
     print('\n📋 测试 IDP 进度文件续跑')
 
-    from main import build_resume_task_context
+    from worker import build_resume_task_context
 
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp) / 'Images' / 'ImagesCache'
@@ -667,12 +676,11 @@ def test_idp_progress_resume_context():
 
 
 def test_record_filename_and_sequence_safety():
-    """测试 agent 乱传记录文件名或离谱序号时会被纠正。"""
+    """测试 agent 乱传记录文件名或离谱序号时会被纠正."""
     print('\n📋 测试记录文件名和序号安全')
 
     import tools_registry
     from tools_registry import (
-        _image_record_file,
         _read_downloaded_records,
         _safe_agent_data_filename,
         _safe_record_sequence_for_existing_file,
@@ -695,11 +703,6 @@ def test_record_filename_and_sequence_safety():
                 results.ok('带空格的 image_record 文件名会归一化')
             else:
                 results.fail('记录文件名归一化', _safe_agent_data_filename('image_record . jsonl', 'image_record.jsonl'))
-
-            if _image_record_file('image_record . jsonl') == run_dir / 'image_record.jsonl':
-                results.ok('_image_record_file 会定位到主记录文件')
-            else:
-                results.fail('_image_record_file', str(_image_record_file('image_record . jsonl')))
 
             if len(_read_downloaded_records('image_record.jsonl')) == 1:
                 results.ok('_read_downloaded_records 接受文件名字符串')
@@ -726,7 +729,7 @@ def test_record_filename_and_sequence_safety():
 
 
 def test_configure_resume_target_script():
-    """测试断点目标配置脚本会更新 progress/config/report。"""
+    """测试断点目标配置脚本会更新 progress/config/report."""
     print('\n📋 测试断点目标配置脚本')
 
     from configure_resume_target import configure_target
@@ -752,16 +755,16 @@ def test_configure_resume_target_script():
 
 
 def test_auto_runner_helpers():
-    """测试自动监督脚本的目标读取和记录计数辅助函数。"""
+    """测试自动监督脚本的目标读取和记录计数辅助函数."""
     print('\n📋 测试自动运行监督脚本辅助函数')
 
-    from auto_run_until_target import normalize_progress_page, read_downloaded_count, read_target_from_task, should_resume_round, sync_progress_from_page_queue
+    from runner import normalize_progress_page, read_downloaded_count, read_target_from_task, should_resume_round, sync_progress_from_page_queue
     from idp_page_progress import mark_page_batch_result
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         task_file = root / 'task.md'
-        task_file.write_text('下载前 n = 123 张图片，target_count=123', encoding='utf-8')
+        task_file.write_text('下载前 n = 123 张图片,target_count=123', encoding='utf-8')
         cache = root / 'Images' / 'ImagesCache'
         cache.mkdir(parents=True)
         (cache / 'image_record.jsonl').write_text(
@@ -772,7 +775,7 @@ def test_auto_runner_helpers():
         )
 
         if read_target_from_task(task_file) == 123 and read_downloaded_count(cache) == 2:
-            results.ok('auto_run_until_target 可读取目标和已下载数')
+            results.ok('runner 可读取目标和已下载数')
         else:
             results.fail('自动运行辅助函数', '目标或计数不正确')
 
@@ -780,13 +783,13 @@ def test_auto_runner_helpers():
         result = normalize_progress_page(cache, max_reasonable_page=200, fallback_page=1)
         progress = json.loads((cache / 'idp_progress.json').read_text(encoding='utf-8'))
         if result.get('changed') and progress['next_page'] == 1 and progress['next_index'] == 0:
-            results.ok('auto_run_until_target 会修正异常深页断点')
+            results.ok('runner 会修正异常深页断点')
         else:
             results.fail('异常页码修正', f'result={result}, progress={progress}')
 
         active = sync_progress_from_page_queue(cache, target_count=123, max_reasonable_page=200, fallback_page=1)
         if active['page'] == 1 and active['next_index'] == 0:
-            results.ok('auto_run_until_target 会从页面队列同步断点')
+            results.ok('runner 会从页面队列同步断点')
         else:
             results.fail('页面队列同步', f'active={active}')
 
@@ -819,16 +822,16 @@ def test_auto_runner_helpers():
 
 
 def test_auto_runner_keyword_update():
-    """测试自动运行脚本可更新 task.md 搜索词和 title_prefix。"""
+    """测试自动运行脚本可更新 task.md 搜索词和 title_prefix."""
     print('\n📋 测试自动运行脚本搜索词更新')
 
-    from auto_run_until_target import update_task_search_keyword
+    from runner import update_task_search_keyword
 
     with tempfile.TemporaryDirectory() as tmp:
         task_file = Path(tmp) / 'task.md'
         task_file.write_text(
             '搜索关键词 **`china buddhist`**\n'
-            '搜索关键词固定为 `china buddhist`。\n'
+            '搜索关键词固定为 `china buddhist`.\n'
             'navigate_idp_search_page(keyword="china buddhist", page=1)\n'
             'title_prefix="china_buddhist"\n'
             'title="china_buddhist_001_x"\n',
@@ -843,16 +846,16 @@ def test_auto_runner_keyword_update():
             and 'china buddhist' not in text
             and 'china_buddhist' not in text
         ):
-            results.ok('auto_run_until_target 可替换 task.md 搜索词')
+            results.ok('runner 可替换 task.md 搜索词')
         else:
             results.fail('搜索词替换', f'summary={summary}, text={text}')
 
 
 def test_auto_runner_keyword_change_archives_cache():
-    """测试外部自动脚本切换搜索词时会按旧搜索词归档旧 ImagesCache。"""
+    """测试外部自动脚本切换搜索词时会按旧搜索词归档旧 ImagesCache."""
     print('\n📋 测试自动运行脚本搜索词切换归档 ImagesCache')
 
-    from auto_run_until_target import archive_cache_for_keyword_change, update_cache_keyword
+    from runner import archive_cache_for_keyword_change, update_cache_keyword
 
     with tempfile.TemporaryDirectory() as tmp:
         cache = Path(tmp) / 'Images' / 'ImagesCache'
@@ -879,10 +882,10 @@ def test_auto_runner_keyword_change_archives_cache():
 
 
 def test_auto_runner_new_run_archives_cache():
-    """测试外部自动脚本选择从头开始时会归档旧 ImagesCache。"""
+    """测试外部自动脚本选择从头开始时会归档旧 ImagesCache."""
     print('\n📋 测试自动运行脚本从头开始归档 ImagesCache')
 
-    from auto_run_until_target import archive_cache
+    from runner import archive_cache
 
     with tempfile.TemporaryDirectory() as tmp:
         cache = Path(tmp) / 'Images' / 'ImagesCache'
@@ -897,38 +900,11 @@ def test_auto_runner_new_run_archives_cache():
             results.fail('外部脚本从头开始归档', f'summary={summary}')
 
 
-def test_log_rotation():
-    """测试大日志会被移动到 history/log_backup_* 并重新创建空日志。"""
-    print('\n📋 测试日志轮转')
-
-    from main import rotate_large_logs
-
-    with tempfile.TemporaryDirectory() as tmp:
-        base_dir = Path(tmp)
-        info_log = base_dir / 'info.log'
-        debug_log = base_dir / 'debug.log'
-        info_log.write_text('small', encoding='utf-8')
-        debug_log.write_text('x' * 20, encoding='utf-8')
-
-        backup_dir = rotate_large_logs(base_dir, threshold_bytes=10)
-        if backup_dir and (backup_dir / 'debug.log').exists() and debug_log.exists() and debug_log.read_text(encoding='utf-8') == '':
-            results.ok('超过阈值的 debug.log 会轮转并重建空文件')
-        else:
-            results.fail('日志轮转', f'backup_dir={backup_dir}, debug_exists={debug_log.exists()}')
-
-        if info_log.read_text(encoding='utf-8') == 'small':
-            results.ok('未超过阈值的 info.log 不会轮转')
-        else:
-            results.fail('日志轮转阈值', '小日志被错误轮转')
-
-
-# ------ 6.7 轻量下载模式测试 ------
-
 def test_lightweight_download_mode():
-    """测试大文件下载时默认启用轻量下载模式，避免 DownloadsWatchdog 堵塞 EventBus"""
+    """测试大文件下载时默认启用轻量下载模式,避免 DownloadsWatchdog 堵塞 EventBus"""
     print('\n📋 测试轻量下载模式')
 
-    import main  # noqa: F401
+    import worker  # noqa: F401
     from browser_use.browser.watchdogs.downloads_watchdog import DownloadsWatchdog
 
     if os.environ.get('BROWSER_USE_LIGHTWEIGHT_DOWNLOADS') == '1':
@@ -967,7 +943,7 @@ def test_quit_mechanism():
     """测试 should_quit 标志和 check_should_quit 回调"""
     print('\n📋 测试退出机制')
 
-    import main as m
+    import worker as m
 
     # 初始状态应为 False
     original = m.should_quit
@@ -998,7 +974,7 @@ def test_quit_mechanism():
 # ------ 7. 图片验证逻辑测试 ------
 
 def test_image_validation():
-    """测试下载结果验证逻辑（IMAGE_EXTENSIONS 覆盖范围）"""
+    """测试下载结果验证逻辑(IMAGE_EXTENSIONS 覆盖范围)"""
     print('\n📋 测试图片验证逻辑')
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -1047,7 +1023,7 @@ def test_image_validation():
 # ------ 8. title.txt 移除回归测试 ------
 
 def test_title_counting():
-    """title.txt 已彻底移除：record_downloaded_image 不再生成它。"""
+    """title.txt 已彻底移除:record_downloaded_image 不再生成它."""
     print('\n📋 测试 title.txt 不再生成')
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -1059,10 +1035,10 @@ def test_title_counting():
 
 
 def test_downloaded_record_counting():
-    """测试 download_record.jsonl 成功记录计数。"""
+    """测试 download_record.jsonl 成功记录计数."""
     print('\n📋 测试下载记录计数')
 
-    from main import count_downloaded_records
+    from worker import count_downloaded_records
 
     with tempfile.TemporaryDirectory() as tmp:
         record_file = Path(tmp) / 'download_record.jsonl'
@@ -1080,7 +1056,7 @@ def test_downloaded_record_counting():
 
 
 def test_record_driven_rename():
-    """测试 rename_images 优先按 download_record.jsonl 精确映射重命名。"""
+    """测试 rename_images 优先按 download_record.jsonl 精确映射重命名."""
     print('\n📋 测试 download_record.jsonl 驱动重命名')
 
     from rename_images import rename_images
@@ -1114,7 +1090,7 @@ def test_record_driven_rename():
 
 
 def test_generic_image_record_workflow():
-    """测试通用记录工具会立即最终命名，并生成 title/info/hash 字段。"""
+    """测试通用记录工具会立即最终命名,并生成 title/info/hash 字段."""
     print('\n📋 测试通用图片记录队列')
 
     import asyncio
@@ -1143,7 +1119,7 @@ def test_generic_image_record_workflow():
                 page_url='https://knmdb.kyohaku.go.jp/object/1',
                 image_url='https://knmdb.kyohaku.go.jp/art_images/1-L.jpg',
                 evidence='标题含寺院建筑语境',
-                metadata='时代：江户；分类：绘画',
+                metadata='时代:江户;分类:绘画',
                 summary='寺院相关藏品图像',
             )))
 
@@ -1169,7 +1145,7 @@ def test_generic_image_record_workflow():
                 and record.get('title_hash')
                 and record.get('source_hash', '')[:8] in record.get('file_name', '')
             ):
-                results.ok('record_downloaded_image 生成信息表、JSONL 和 hash 字段')
+                results.ok('record_downloaded_image 生成信息表,JSONL 和 hash 字段')
             else:
                 results.fail('记录文件生成', '信息表或 JSONL 内容不完整')
 
@@ -1184,10 +1160,10 @@ def test_generic_image_record_workflow():
             tools_registry.AGENT_DATA_DIR = old_data_dir
 
 
-# ------ 9. 端到端模拟测试（Mock Agent） ------
+# ------ 9. 端到端模拟测试(Mock Agent) ------
 
 def test_end_to_end_mock():
-    """模拟完整流程：task读取 → move_images → Agent(mock) → 验证 → rename"""
+    """模拟完整流程:task读取 → move_images → Agent(mock) → 验证 → rename"""
     print('\n📋 端到端模拟测试')
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -1213,14 +1189,14 @@ def test_end_to_end_mock():
             results.fail('task.md 读取', '内容为空')
 
         # --- 测试 move_images.py 执行 ---
-        from main import run_python_script
+        from worker import run_python_script
         ok = run_python_script(str(tmp / 'move_images.py'), '图片迁移', extra_args=['--no-confirm'])
         if ok:
             results.ok('move_images.py --no-confirm 执行成功')
         else:
             results.fail('move_images.py', '执行失败')
 
-        # --- 模拟 Agent 运行（不调用 LLM）---
+        # --- 模拟 Agent 运行(不调用 LLM)---
         # 验证 image 目录中有文件
         image_files = list((tmp / 'image').glob('*.tiff'))
         if len(image_files) == 3:
@@ -1293,7 +1269,7 @@ def test_information_md():
 
     from tools_registry import BASE_DIR
 
-    info_path = BASE_DIR / 'Information.md'
+    info_path = BASE_DIR / 'legacy' / 'Information.md'
     if not info_path.exists():
         results.fail('Information.md', '文件不存在')
         return
@@ -1313,7 +1289,7 @@ def test_information_md():
         if len(lines) >= 2:
             results.ok(f'代码块 {i + 1}: 首行="{lines[0].strip()[:40]}", 尾行="{lines[-1].strip()[:40]}"')
         elif len(lines) == 1:
-            results.fail(f'代码块 {i + 1}', '只有一行，需要首尾两行')
+            results.fail(f'代码块 {i + 1}', '只有一行,需要首尾两行')
         else:
             results.fail(f'代码块 {i + 1}', '空代码块')
 
@@ -1322,9 +1298,73 @@ def test_information_md():
 # 运行所有测试
 # ============================================================
 
+def test_idp_batch_adapter():
+    """测试当前默认批量模式的 IDPAdapter 站点契约(URL 构造/判定/解析)。"""
+    print('\n📋 测试 IDP 批量适配器')
+
+    from adapters.idp import IDPAdapter
+
+    adapter = IDPAdapter()
+    url = adapter.build_search_url('china buddhist', 2, 50)
+    if 'idp.bl.uk' in url and 'term=china+buddhist' in url and 'page=2' in url:
+        results.ok('IDPAdapter.build_search_url 生成正确搜索 URL')
+    else:
+        results.fail('IDPAdapter.build_search_url', url)
+
+    if adapter.is_results_url(url) and not adapter.is_results_url('https://idp.bl.uk/collection/ABC123/'):
+        results.ok('IDPAdapter.is_results_url 能区分结果页与详情页')
+    else:
+        results.fail('IDPAdapter.is_results_url', url)
+
+    keyword, page, limit = adapter.parse_search_url(url)
+    if keyword == 'china buddhist' and page == 2 and limit == 50:
+        results.ok('IDPAdapter.parse_search_url 正确解析关键词/页码/数量')
+    else:
+        results.fail('IDPAdapter.parse_search_url', f'{keyword}/{page}/{limit}')
+
+    manifest = adapter.manifest_url_for_item({'manifest_url': 'https://data.idp.bl.uk/iiif/3/manifest/X'})
+    if manifest.endswith('/manifest/X'):
+        results.ok('IDPAdapter.manifest_url_for_item 取出 IIIF manifest URL')
+    else:
+        results.fail('IDPAdapter.manifest_url_for_item', manifest)
+
+
+def test_generic_config_adapter():
+    """测试通用化骨架:ConfigIIIFAdapter 由 JSON profile 驱动 + registry 按 URL 选 adapter。"""
+    print('\n📋 测试通用配置适配器')
+
+    from adapters.generic_config import ConfigIIIFAdapter
+    from adapters.registry import resolve_adapter
+    from adapters.idp import IDPAdapter
+
+    profile = {
+        'site_id': 'demo', 'host_suffixes': ['demo.org'], 'results_host': 'demo.org',
+        'results_path': '/search', 'keyword_param': 'q', 'page_param': 'page', 'limit_param': 'limit',
+        'item_link_selector': "a[href*='/item/']", 'item_id_regex': '/item/([0-9a-f]+)',
+        'manifest_template': 'https://demo.org/iiif/{id}/manifest.json',
+    }
+    a = ConfigIIIFAdapter(profile)
+    if a.is_results_url('https://demo.org/search?q=temple&page=2&limit=30') and a.parse_search_url(
+        'https://demo.org/search?q=temple&page=2&limit=30') == ('temple', 2, 30):
+        results.ok('ConfigIIIFAdapter 由 JSON 正确判定/解析结果页')
+    else:
+        results.fail('ConfigIIIFAdapter URL', a.parse_search_url('https://demo.org/search?q=temple&page=2&limit=30'))
+
+    if a.manifest_url_for_item({'manifest_url': 'https://demo.org/iiif/ab12/manifest.json'}).endswith('ab12/manifest.json'):
+        results.ok('ConfigIIIFAdapter 取出 manifest URL')
+    else:
+        results.fail('ConfigIIIFAdapter manifest', '解析失败')
+
+    # IDP URL 仍回退到内置 IDPAdapter,未知站点也兜底为 IDP(尚未接线通用 resolver)
+    if isinstance(resolve_adapter('https://idp.bl.uk/collection/?term=temple'), IDPAdapter):
+        results.ok('registry.resolve_adapter 对 IDP URL 选用 IDPAdapter')
+    else:
+        results.fail('registry.resolve_adapter', '未回退到 IDPAdapter')
+
+
 def main():
     print('=' * 60)
-    print('  main.py 功能测试（不调用大模型）')
+    print('  main.py 功能测试(不调用大模型)')
     print('=' * 60)
 
     test_run_python_script()
@@ -1347,7 +1387,6 @@ def main():
     test_auto_runner_keyword_update()
     test_auto_runner_keyword_change_archives_cache()
     test_auto_runner_new_run_archives_cache()
-    test_log_rotation()
     test_lightweight_download_mode()
     test_quit_mechanism()
     test_image_validation()
@@ -1358,6 +1397,8 @@ def main():
     test_generic_image_record_workflow()
     test_information_md()
     test_end_to_end_mock()
+    test_idp_batch_adapter()
+    test_generic_config_adapter()
 
     all_passed = results.summary()
     sys.exit(0 if all_passed else 1)
@@ -1365,3 +1406,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

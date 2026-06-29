@@ -1,35 +1,31 @@
-# 通用最强下载工具改造（download_image_from_url）
+# 项目清理与路线图 plan.md
 
-目标：把批量工具的效率本钱搬进逐项通用工具 `download_image_from_url`，并把 IDP 专用 hint 解耦，使其成为唯一的通用下载工具。批量工具暂不删，验证通用流程跑通后再决定。
+> 通用图库爬虫（IDP 为已跑通 MVP，目标推广到结构相似 IIIF 站点）。
+> 详细架构见 WORKFLOW.md。本文件只跟踪「清理进度 + 后续路线」。
 
-## Part A — 效率：缓存索引去重 + 快速落库
-现状：download_image_from_url 每次调用把 image_record.jsonl 重读 ~3 遍（image_url / file_hash / record 落库各扫一次）+ 重扫 IMAGE_DIR，逐项 N 张图是 O(N²)。
+## 1. 已完成（代码结构清理）
+- [x] main.py → worker.py（单轮入口）、auto_run_until_target.py → runner.py（监工）
+- [x] runner.py 加 RUN_ONCE 开关（默认 0 持续跑，改 1 单轮停）
+- [x] 逐 item 兜底工具迁入 legacy/ 且默认不注册（download_image_from_url / next_search_item / extract_page_to_markdown），record_downloaded_image 受 BROWSER_USE_ENABLE_LEGACY_TOOLS 控制
+- [x] 公共逻辑下沉 core/（task_parse.py、cache_layout.py），worker/runner 去重
+- [x] 删死代码：worker 的 rotate_large_logs / 输入监听线程 / 重复 count；runner 6 个与 core 重复的函数
+- [x] 注释 + 字符串全角中文标点 → 英文标点
+- [x] info.md 删除；Information.md 移入 legacy/ 并清掉活跃引用
+- [x] 基线测试 101/101 通过（python -m tests.test_worker）
 
-改造：
-- [ ] tools_registry.py 新增 module 级缓存 `_GENERIC_DOWNLOAD_INDEX_CACHE`
-  - `_get_cached_download_index(record_filename)` -> (index, existing_image_hashes, cache_entry)
-  - 失效条件：record_file mtime 变化 或 IMAGE_DIR 变化（configure_runtime_paths）
-  - `_refresh_generic_index_mtime(cache_entry)`：本工具自己 append 写后刷新缓存 mtime，避免下次误判失效重建
-  - 复用现成 `_build_download_record_index` / `_build_existing_image_hash_index`
-- [ ] 新增 `_safe_requested_image_sequence_from_index(requested, index, file_prefix)`：用 index.max_sequence 取下一安全序号，免重读 JSONL
-- [ ] download_image_from_url：
-  - 去重 A（下载前 image_url）→ `index.records_by_image_url.get(image_url)`
-  - 去重 B（下载后 content sha256）→ `index.records_by_file_hash.get(file_hash)`
-  - 去重 C（下载后磁盘 sha256）→ `existing_image_hashes.get(file_hash)`
-  - 落库 → `_record_saved_image_fast(record_index=index, existing_image_hashes=...)` 取代 `_record_saved_kyohaku_image`
-  - 落库成功后刷新缓存 mtime
-  - 保留所有现有返回信息/语义
+## 2. 待做（继续减负，低风险）
+- [ ] runner.read_downloaded_count 与 core/cache_layout.count_downloaded_records 合并
+- [ ] archive_cache / archive_cache_for_keyword_change 下沉公共模块
+- [ ] 复核 legacy/ 是否还有可彻底删除的死工具
 
-## Part B — 解耦 IDP hint，使下载工具纯通用
-- [ ] tools_registry.py 新增 host-keyed 注册表 `_SITE_DOWNLOAD_HINTS` + `register_download_site_hint(...)`
-  - `_site_manifest_url_from_page_url(url)` / `_site_invalid_collection_url(url)` 通用分发
-  - 注册 IDP 实现（复用现有 `_idp_manifest_url_from_page_url` / `_is_invalid_idp_collection_url`），保证 IDP 行为不变
-- [ ] download_image_from_url 改用通用分发函数，去掉文件内 IDP 命名；manifest_note 文案改通用
-- [ ] tools_registry 现有 IDP helper 保留（navigate / _choose_reliable_page_url 仍用），不动其它调用方
+## 3. 路线图（通用化，主线）
+- [ ] 批量工具改用 registry.resolve_adapter 自动选 adapter（现硬编码 IDPAdapter）
+- [ ] profile_site.py 跑通「DOM → profile 草稿 → 人工确认」闭环
+- [ ] ConfigIIIFAdapter 接第二个 IIIF 站点验证零代码接入
+- [ ] 多站点同时运行 + 站点 review 流程
 
-## 验证
-- [ ] python -c 导入 tool_actions.download_image_from_url / tools_registry OK
-- [ ] 比对 tools 注册 action 列表与基线一致
-- [ ] py_compile 全量
-- [ ] 跑 test_main.py（基线 101/102，保持不退化）
-- [ ] 默认不 push（除非用户要求）
+## 4. 维护须知（勿删）
+- pyproject.toml：browser_use v0.11.9 包定义，.venv 由此 editable 安装，删则环境废
+- task_config.json：唯一手改配置（keyword/target/site），render_task/runner/webapp 调用
+- 运行：.\.venv\Scripts\python.exe，设 PYTHONIOENCODING=utf-8；改配置后 python scripts/render_task.py 重渲染 task.md，勿手改 task.md
+- 默认不 push GitHub

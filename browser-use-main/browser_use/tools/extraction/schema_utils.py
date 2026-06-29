@@ -55,7 +55,7 @@ def _resolve_type(schema: dict, name: str) -> Any:
 
 	json_type = schema.get('type', 'string')
 
-	# Enums — constrain to str (Literal would be stricter but LLMs are flaky)
+	# Enums - constrain to str (Literal would be stricter but LLMs are flaky)
 	if 'enum' in schema:
 		return str
 
@@ -117,7 +117,7 @@ def _build_model(schema: dict, name: str) -> type[BaseModel]:
 			# where no in-set or constructible default exists.
 			json_type = prop_schema.get('type', 'string')
 			if 'enum' in prop_schema:
-				# Can't pick an arbitrary enum member as default — use None
+				# Can't pick an arbitrary enum member as default - use None
 				# so absent fields serialize as null, not an out-of-set value.
 				prop_type = prop_type | None
 				default = None
@@ -126,7 +126,7 @@ def _build_model(schema: dict, name: str) -> type[BaseModel]:
 			elif json_type == 'array':
 				default = []
 			else:
-				# Nested object or unknown — must allow None as sentinel
+				# Nested object or unknown - must allow None as sentinel
 				prop_type = prop_type | None
 				default = None
 

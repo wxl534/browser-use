@@ -1,11 +1,11 @@
-"""idp.bl.uk（British Library International Dunhuang Project）站点插件。
+"""idp.bl.uk(British Library International Dunhuang Project)站点插件.
 
 把 IDP 特有的 URL 判定 / IIIF manifest 推导 / item id 提取 / 抓取进度 helper /
-参数模型集中在此，并通过 register_download_site_hint 注入通用下载/发号工具。
-tools_registry 通用核心因此不含任何 idp.bl.uk 硬编码。
+参数模型集中在此,并通过 register_download_site_hint 注入通用下载/发号工具.
+tools_registry 通用核心因此不含任何 idp.bl.uk 硬编码.
 
-注意：本模块从 tools_registry 导入共享基建，因此 tools_registry 必须在其底部
-（所有共享名定义完成后）再 `import sites.idp`，避免循环导入。
+注意:本模块从 tools_registry 导入共享基建,因此 tools_registry 必须在其底部
+(所有共享名定义完成后)再 `import sites.idp`,避免循环导入.
 """
 import json as json_module
 import re
@@ -25,7 +25,7 @@ from tools_registry import (
 
 
 def idp_is_invalid_collection_url(url: str) -> bool:
-    """idp.bl.uk 上「collection/<非 24-64 位 hex>」属于搜索/列表页，不是合法详情页。"""
+    """idp.bl.uk 上「collection/<非 24-64 位 hex>」属于搜索/列表页,不是合法详情页."""
     parsed = urlparse(_clean_url_text(url))
     if (parsed.hostname or '').lower() != 'idp.bl.uk':
         return False
@@ -39,7 +39,7 @@ def idp_is_invalid_collection_url(url: str) -> bool:
 
 
 def idp_is_valid_page_url(url: str) -> bool:
-    """idp.bl.uk 上 collection 根页或 collection/<24-64 位 hex> 详情页视为合法。"""
+    """idp.bl.uk 上 collection 根页或 collection/<24-64 位 hex> 详情页视为合法."""
     parsed = urlparse(_clean_url_text(url))
     if (parsed.hostname or '').lower() != 'idp.bl.uk':
         return False
@@ -53,7 +53,7 @@ def idp_is_valid_page_url(url: str) -> bool:
 
 
 def idp_manifest_url_from_page_url(page_url: str) -> str:
-    """从 IDP 详情页 URL 推导 data.idp.bl.uk 的 IIIF v3 manifest URL。"""
+    """从 IDP 详情页 URL 推导 data.idp.bl.uk 的 IIIF v3 manifest URL."""
     parsed = urlparse((page_url or '').strip())
     host = (parsed.hostname or '').lower()
     path = parsed.path.strip('/')
@@ -67,7 +67,7 @@ def idp_manifest_url_from_page_url(page_url: str) -> str:
 
 
 def idp_item_id_from_urls(page_url: str, image_url: str = '') -> str:
-    """从 IDP 的详情页 / manifest / iiif URL 提取站内 item id（大写）。"""
+    """从 IDP 的详情页 / manifest / iiif URL 提取站内 item id(大写)."""
     for raw_url in (page_url, image_url):
         parsed = urlparse((raw_url or '').strip())
         path_parts = [part for part in parsed.path.split('/') if part]
@@ -88,7 +88,7 @@ def idp_item_id_from_urls(page_url: str, image_url: str = '') -> str:
     return ''
 
 
-# === IDP 抓取进度（navigate_idp_search_page 工具与 main.py 续跑使用）===
+# === IDP 抓取进度(navigate_idp_search_page 工具与 main.py 续跑使用)===
 
 
 def _idp_progress_file() -> Path:
@@ -118,18 +118,18 @@ def _write_idp_progress(progress: dict) -> Path:
 
 class NavigateIdpSearchPageParams(BaseModel):
     """跳转 IDP 搜索结果页的参数模型"""
-    keyword: str = Field(default='china temple', description='搜索关键词，默认 china temple')
-    page: str | int = Field(default=1, description='页码；工具会从类似 2D 的脏值中提取数字')
-    limit: str | int = Field(default=50, description='每页条数；工具会限制到 1-100')
+    keyword: str = Field(default='china temple', description='搜索关键词,默认 china temple')
+    page: str | int = Field(default=1, description='页码;工具会从类似 2D 的脏值中提取数字')
+    limit: str | int = Field(default=50, description='每页条数;工具会限制到 1-100')
 
 
 class DownloadCurrentIdpSearchPageImagesParams(BaseModel):
-    """批量下载当前 IDP 搜索结果页中的图片。"""
-    target_count: int = Field(default=1000, ge=1, description='总目标有效记录数，达到后自动停止')
+    """批量下载当前 IDP 搜索结果页中的图片."""
+    target_count: int = Field(default=1000, ge=1, description='总目标有效记录数,达到后自动停止')
     max_items: int = Field(default=50, ge=1, le=100, description='当前搜索页最多处理多少个藏品结果')
-    start_index: int = Field(default=0, ge=0, description='从当前搜索页第几个结果开始处理，0 表示第一个')
-    images_per_item: int = Field(default=1, ge=1, le=5, description='每个藏品最多保存几张图片，默认只保存主图')
-    file_prefix: str = Field(default='temple', description='保存文件名前缀，例如 temple')
+    start_index: int = Field(default=0, ge=0, description='从当前搜索页第几个结果开始处理,0 表示第一个')
+    images_per_item: int = Field(default=1, ge=1, le=5, description='每个藏品最多保存几张图片,默认只保存主图')
+    file_prefix: str = Field(default='temple', description='保存文件名前缀,例如 temple')
     title_prefix: str = Field(default='china_temple', description='图片标题/文件名前缀')
     allowed_host_suffixes: list[str] = Field(
         default_factory=lambda: ['idp.bl.uk', 'data.idp.bl.uk', 'bl.uk'],

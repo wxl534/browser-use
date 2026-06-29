@@ -397,10 +397,10 @@ def chunk_markdown_by_structure(
 	"""Split markdown into structure-aware chunks.
 
 	Algorithm:
-	  Phase 1 — Parse atomic blocks (headers, code fences, tables, list items, paragraphs).
-	  Phase 2 — Greedy chunk assembly: accumulate blocks until exceeding max_chunk_chars.
+	  Phase 1 - Parse atomic blocks (headers, code fences, tables, list items, paragraphs).
+	  Phase 2 - Greedy chunk assembly: accumulate blocks until exceeding max_chunk_chars.
 	            A single block exceeding the limit is allowed (soft limit).
-	  Phase 3 — Build overlap prefixes for context carry between chunks.
+	  Phase 3 - Build overlap prefixes for context carry between chunks.
 
 	Args:
 	    content: Full markdown string.

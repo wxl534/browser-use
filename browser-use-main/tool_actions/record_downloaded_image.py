@@ -1,6 +1,6 @@
-"""`record_downloaded_image` 工具：从 tools_registry.py 拆分而来。
+"""`record_downloaded_image` 工具:从 tools_registry.py 拆分而来.
 
-共享 helper / 参数模型仍由 tools_registry 提供；运行时全局通过 tr.* 实时读取。
+共享 helper / 参数模型仍由 tools_registry 提供;运行时全局通过 tr.* 实时读取.
 """
 import tools_registry as tr
 from tools_registry import (
@@ -26,22 +26,23 @@ from tools_registry import (
     _validate_saved_image_file,
     _write_image_records,
     datetime,
+    legacy_tools_action,
     timezone,
     tools,
 )
 
 
-@tools.action(
+@legacy_tools_action(
     description=(
-        '记录一张已成功保存到 ImagesCache 缓存目录的非 LOC 图片。'
-        '工具会用 UTF-8 自动去重并重写 browseruse_agent_data/image_record.jsonl 和信息表，'
-        '避免 write_file 追加导致重复行或 GBK 编码错误。'
+        '记录一张已成功保存到 ImagesCache 缓存目录的非 LOC 图片.'
+        '工具会用 UTF-8 自动去重并重写 browseruse_agent_data/image_record.jsonl 和信息表,'
+        '避免 write_file 追加导致重复行或 GBK 编码错误.'
     ),
     param_model=RecordDownloadedImageParams,
 )
 async def record_downloaded_image(params: RecordDownloadedImageParams):
     """
-    为普通网站/截图下载流程记录图片、标题和元数据。
+    为普通网站/截图下载流程记录图片,标题和元数据.
     """
     try:
         data_dir = tr.AGENT_DATA_DIR

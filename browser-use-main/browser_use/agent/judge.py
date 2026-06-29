@@ -229,7 +229,7 @@ def construct_simple_judge_messages(
 ) -> list[BaseMessage]:
 	"""Construct lightweight judge messages to validate agent success claims.
 
-	Always runs regardless of use_judge setting. Text-only — no screenshots,
+	Always runs regardless of use_judge setting. Text-only - no screenshots,
 	no trajectory. Just task + final result.
 	"""
 	task_truncated = _truncate_text(task, 20000)

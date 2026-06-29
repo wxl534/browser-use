@@ -78,8 +78,8 @@ def update_task_target(task_file: Path, target_count: int) -> int | None:
     if old_target is None:
         text = re.sub(r'(## 任务目标\s*)', rf'\1\n目标数量：前 n = {target_count} 张\n', text, count=1)
     else:
-        # 只更新目标声明本身（`n = X` 与 `target_count=X`），不要全局替换数字字符串，
-        # 否则会误伤 task.md 里的 "page 5000"、"limit=50" 等无关数字。
+        # 只更新目标声明本身(`n = X` 与 `target_count=X`),不要全局替换数字字符串,
+        # 否则会误伤 task.md 里的 "page 5000","limit=50" 等无关数字.
         text = re.sub(r'(\bn\s*=\s*)\d+\b', rf'\g<1>{target_count}', text)
         text = re.sub(r'(target_count\s*=\s*)\d+', rf'\g<1>{target_count}', text)
     task_file.write_text(text, encoding='utf-8')
@@ -179,7 +179,7 @@ def configure_target(cache_dir: Path, target_count: int, update_task: bool = Tru
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Configure ImagesCache resume target.')
-    parser.add_argument('target_count', nargs='?', type=int, help='目标总下载数量，例如 10000')
+    parser.add_argument('target_count', nargs='?', type=int, help='目标总下载数量,例如 10000')
     parser.add_argument('--cache-dir', type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument('--no-task-update', action='store_true', help='不修改 task.md')
     return parser.parse_args()

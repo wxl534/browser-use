@@ -1,11 +1,11 @@
 """
-按用户粘贴的一条日志行，裁剪 info.log 前面的所有内容。
+按用户粘贴的一条日志行,裁剪 info.log 前面的所有内容.
 
-使用方式：
+使用方式:
     python trim_info_log.py
 
-脚本会提示你粘贴一条来自 info.log 的、包含时间戳的完整日志行。
-找到后，会保留该行以及其后面的所有内容，并删除它前面的所有内容。
+脚本会提示你粘贴一条来自 info.log 的,包含时间戳的完整日志行.
+找到后,会保留该行以及其后面的所有内容,并删除它前面的所有内容.
 """
 
 from pathlib import Path
@@ -16,16 +16,16 @@ DEFAULT_LOG_FILE = BASE_DIR / 'info.log'
 
 def normalize_pasted_line(line: str) -> str:
     """
-    规范化用户粘贴的日志行。
+    规范化用户粘贴的日志行.
     """
     return line.replace('\r\n', '\n').replace('\r', '\n').strip('\n').strip()
 
 
 def find_line_index(lines: list[str], pasted_line: str) -> int:
     """
-    在日志行列表中查找匹配的行号。
+    在日志行列表中查找匹配的行号.
 
-    优先精确匹配整行；如果失败，再尝试用去首尾空白后的文本匹配。
+    优先精确匹配整行;如果失败,再尝试用去首尾空白后的文本匹配.
     """
     normalized_target = normalize_pasted_line(pasted_line)
     if not normalized_target:
@@ -39,15 +39,15 @@ def find_line_index(lines: list[str], pasted_line: str) -> int:
         if line.strip() == normalized_target:
             return index
 
-    raise ValueError('在 info.log 中未找到这条日志，请确认你粘贴的是文件中的完整单行日志。')
+    raise ValueError('在 info.log 中未找到这条日志,请确认你粘贴的是文件中的完整单行日志.')
 
 
 def trim_log_before_line(log_file: Path, pasted_line: str) -> int:
     """
-    删除 log_file 中目标行之前的所有内容。
+    删除 log_file 中目标行之前的所有内容.
 
     Returns:
-        被删除的行数。
+        被删除的行数.
     """
     if not log_file.exists():
         raise FileNotFoundError(f'日志文件不存在: {log_file}')
@@ -64,7 +64,7 @@ def main() -> None:
     print('[工具] 裁剪 info.log 前置内容')
     print('=' * 60)
     print(f'[信息] 目标日志文件: {DEFAULT_LOG_FILE}')
-    print('[提示] 请粘贴一条来自 info.log 的完整单行日志（必须包含时间戳）')
+    print('[提示] 请粘贴一条来自 info.log 的完整单行日志(必须包含时间戳)')
 
     pasted_line = input('> ').strip()
     try:

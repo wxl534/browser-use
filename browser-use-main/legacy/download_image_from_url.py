@@ -1,6 +1,6 @@
-"""`download_image_from_url` 工具：从 tools_registry.py 拆分而来。
+"""`download_image_from_url` 工具:从 tools_registry.py 拆分而来.
 
-共享 helper / 参数模型仍由 tools_registry 提供；运行时全局通过 tr.* 实时读取。
+共享 helper / 参数模型仍由 tools_registry 提供;运行时全局通过 tr.* 实时读取.
 """
 import tools_registry as tr
 from tools_registry import (
@@ -41,17 +41,17 @@ from tools_registry import (
 
 @tools.action(
     description=(
-        '通用图片下载并记录工具：可自动从当前页面提取公网图片 URL，也可接收明确的图片直链、IIIF manifest、IIIF 大图 URL 或 viewer 图片 URL；'
-        '按学习到的优先顺序依次尝试 Python 直连、浏览器上下文 fetch、干净截图裁剪兜底，'
-        '保存到 ImagesCache 缓存目录，并同步写入 image_record.jsonl 和 temple_photo_info.md。'
-        '适用于任意"搜索栏 + item 列表"的图库站点：站点专属加速（如 URL→IIIF manifest 推导）通过站点 hint 自动注入，'
-        '未注册站点或传入 force_generic=True 时会回退到"图片直链 + DOM 候选 + 截图兜底"的通用路径。'
+        '通用图片下载并记录工具:可自动从当前页面提取公网图片 URL,也可接收明确的图片直链,IIIF manifest,IIIF 大图 URL 或 viewer 图片 URL;'
+        '按学习到的优先顺序依次尝试 Python 直连,浏览器上下文 fetch,干净截图裁剪兜底,'
+        '保存到 ImagesCache 缓存目录,并同步写入 image_record.jsonl 和 temple_photo_info.md.'
+        '适用于任意"搜索栏 + item 列表"的图库站点:站点专属加速(如 URL→IIIF manifest 推导)通过站点 hint 自动注入,'
+        '未注册站点或传入 force_generic=True 时会回退到"图片直链 + DOM 候选 + 截图兜底"的通用路径.'
     ),
     param_model=DownloadImageFromUrlParams,
 )
 async def download_image_from_url(params: DownloadImageFromUrlParams, browser_session):
     """
-    下载任意公网图片直链并记录元数据，支持自动找图、浏览器 fetch 和干净截图兜底。
+    下载任意公网图片直链并记录元数据,支持自动找图,浏览器 fetch 和干净截图兜底.
     """
     try:
         page_data: dict = {}
@@ -67,7 +67,7 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
             if not params.image_url.strip() and not page_url:
                 raise RuntimeError(
                     f'当前浏览器无法提取图片候选: {extraction_error}。'
-                    '如果日志包含 browser not connected / No valid agent focus，请停止当前任务并重启浏览器会话。'
+                    '如果日志包含 browser not connected / No valid agent focus,请停止当前任务并重启浏览器会话.'
                 ) from e
 
         if _site_invalid_collection_url(page_url):
@@ -121,9 +121,9 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
                 )
                 image_url = resolved_image_url
             except Exception as iiif_error:
-                # 兜底：网站没有 IIIF 逻辑 / manifest 损坏 / 非标准 / 网络失败时，
-                # 不让 IIIF 解析失败直接判定整个下载失败，依次回退到页面 DOM 图片直链、
-                # 再到 clean_screenshot 截图；都不可用才报错。
+                # 兜底:网站没有 IIIF 逻辑 / manifest 损坏 / 非标准 / 网络失败时,
+                # 不让 IIIF 解析失败直接判定整个下载失败,依次回退到页面 DOM 图片直链,
+                # 再到 clean_screenshot 截图;都不可用才报错.
                 fallback_image_url = ''
                 for candidate in candidates:
                     if not candidate or candidate == manifest_source_url:
@@ -148,7 +148,7 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
                 else:
                     raise RuntimeError(
                         f'IIIF manifest 解析失败且无兜底可用: {iiif_error}。'
-                        '可传入图片直链、确保页面已显示大图，或允许 clean_screenshot 兜底。'
+                        '可传入图片直链,确保页面已显示大图,或允许 clean_screenshot 兜底.'
                     ) from iiif_error
 
         record_index, existing_image_hashes, index_cache = _get_cached_download_index(params.record_filename)
@@ -181,8 +181,8 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
         sequence, sequence_note = _safe_requested_image_sequence_from_index(params.sequence, record_index, file_prefix)
         title = _renumber_title_if_needed(params.title, sequence)
         border_ratio = _normalize_border_ratio(params.border_ratio)
-        # 临时落地名 = 图片自己的「序号_标题」（信息提取阶段已识别 title），落地瞬间即可读；
-        # 落地后只在该词干后追加信息 hash（source_hash），定为最终名，保证图片与信息严格对应。
+        # 临时落地名 = 图片自己的「序号_标题」(信息提取阶段已识别 title),落地瞬间即可读;
+        # 落地后只在该词干后追加信息 hash(source_hash),定为最终名,保证图片与信息严格对应.
         file_name = _titled_image_stem(title, sequence)
 
         strategy_before = _load_generic_image_strategy()
@@ -286,7 +286,7 @@ async def download_image_from_url(params: DownloadImageFromUrlParams, browser_se
                 image_path.unlink(missing_ok=True)
             return record_result
         if record_index.downloaded_count == downloaded_count_before:
-            # 落库环节内部判定为重复（content/source hash），已删除本次文件并跳过。
+            # 落库环节内部判定为重复(content/source hash),已删除本次文件并跳过.
             return record_result
 
         final_record = record_index.records[-1]

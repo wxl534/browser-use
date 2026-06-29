@@ -1,6 +1,6 @@
-"""`extract_page_to_markdown` 工具：从 tools_registry.py 拆分而来。
+"""`extract_page_to_markdown` 工具:从 tools_registry.py 拆分而来.
 
-共享 helper / 参数模型仍由 tools_registry 提供；运行时全局通过 tr.* 实时读取。
+共享 helper / 参数模型仍由 tools_registry 提供;运行时全局通过 tr.* 实时读取.
 """
 import tools_registry as tr
 from tools_registry import (
@@ -22,19 +22,19 @@ from tools_registry import (
 )
 async def extract_page_to_markdown(params: ExtractPageContentParams, browser_session):
     """
-    使用JavaScript提取网页源代码中符合Information.md文件中HTML代码块首尾行的部分。
+    使用JavaScript提取网页源代码中符合Information.md文件中HTML代码块首尾行的部分.
 
     参数说明:
     - output_filename: 输出文件名
     - output_dir: 输出目录
-    - format_type: 格式类型，可选 'markdown'/'json'/'text'
+    - format_type: 格式类型,可选 'markdown'/'json'/'text'
     - information_file_path: Information.md文件路径
     """
     try:
         info_file_path, output_dir_path = _resolve_extract_paths(params)
         search_patterns = _load_information_patterns(info_file_path)
 
-        # JavaScript：获取网页源代码并查找匹配的代码块
+        # JavaScript:获取网页源代码并查找匹配的代码块
         js_code = f'''
         (function() {{
             try {{
@@ -113,7 +113,7 @@ async def extract_page_to_markdown(params: ExtractPageContentParams, browser_ses
         # 清理文件名中的非法字符
         safe_filename = _safe_extract_filename(params.output_filename, file_ext)
 
-        # 构建完整路径（使用已验证的 output_dir）
+        # 构建完整路径(使用已验证的 output_dir)
         output_path = _write_extracted_file(output_dir_path, safe_filename, file_content)
 
         success_msg = (

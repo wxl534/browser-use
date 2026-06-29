@@ -3,13 +3,13 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 
-# 使用脚本所在目录作为基准路径，而非硬编码
+# 使用脚本所在目录作为基准路径,而非硬编码
 BASE_DIR = Path(__file__).resolve().parent
 
 
 def safe_print(message: str) -> None:
     """
-    Windows GBK 控制台遇到梵文/变音字符文件名时可能编码失败；降级输出但不中断迁移。
+    Windows GBK 控制台遇到梵文/变音字符文件名时可能编码失败;降级输出但不中断迁移.
     """
     try:
         print(message)
@@ -19,23 +19,23 @@ def safe_print(message: str) -> None:
 
 def move_and_clear_images(interactive: bool = True):
     """
-    清空 image 文件夹，并将内容移动到 history 文件夹。
+    清空 image 文件夹,并将内容移动到 history 文件夹.
 
     Args:
-        interactive: 是否允许交互式确认（subprocess 调用时应为 False）
+        interactive: 是否允许交互式确认(subprocess 调用时应为 False)
     """
     # 定义路径
     image_dir = BASE_DIR / "image"
     history_dir = BASE_DIR / "history"
     
-    # 创建 history 文件夹（如果不存在）
+    # 创建 history 文件夹(如果不存在)
     history_dir.mkdir(exist_ok=True)
 
     # 生成带时间戳的子文件夹名
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     target_dir = history_dir / f"image_backup_{timestamp}"
     
-    # === 第一部分：处理 image 文件夹 ===
+    # === 第一部分:处理 image 文件夹 ===
     if image_dir.exists():
         files = list(image_dir.glob("*"))
         
@@ -69,10 +69,10 @@ def move_and_clear_images(interactive: bool = True):
     return True
 
 
-# === Information.md 清理功能（独立函数，便于单独调用或注释） ===
+# === Information.md 清理功能(独立函数,便于单独调用或注释) ===
 def clear_information_md(interactive: bool = True):
     """
-    清空 Information.md 文件（先备份到 history）。
+    清空 Information.md 文件(先备份到 history).
 
     Args:
         interactive: 是否需要用户确认
@@ -130,7 +130,7 @@ def clear_information_md(interactive: bool = True):
 if __name__ == "__main__":
     import sys
 
-    # 检查是否为非交互模式（被 subprocess 调用时传入 --no-confirm）
+    # 检查是否为非交互模式(被 subprocess 调用时传入 --no-confirm)
     no_confirm = '--no-confirm' in sys.argv
 
     try:

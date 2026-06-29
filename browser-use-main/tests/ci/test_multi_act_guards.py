@@ -99,7 +99,7 @@ def tools():
 
 
 # ---------------------------------------------------------------------------
-# 1. Metadata tests — verify terminates_sequence flags
+# 1. Metadata tests - verify terminates_sequence flags
 # ---------------------------------------------------------------------------
 
 
@@ -148,7 +148,7 @@ class TestTerminatesSequenceMetadata:
 
 
 # ---------------------------------------------------------------------------
-# 2. Static guard — navigate as non-last action skips remaining
+# 2. Static guard - navigate as non-last action skips remaining
 # ---------------------------------------------------------------------------
 
 
@@ -200,12 +200,12 @@ class TestStaticGuard:
 
 		results = await agent.multi_act(actions)
 
-		# go_back should terminate the sequence — only 1 result
+		# go_back should terminate the sequence - only 1 result
 		assert len(results) == 1, f'Expected 1 result but got {len(results)}: {results}'
 
 
 # ---------------------------------------------------------------------------
-# 3. Runtime guard — click on link changes URL, remaining actions skipped
+# 3. Runtime guard - click on link changes URL, remaining actions skipped
 # ---------------------------------------------------------------------------
 
 
@@ -213,7 +213,7 @@ class TestRuntimeGuard:
 	"""Verify that URL/focus changes detected at runtime abort remaining actions."""
 
 	async def test_click_link_aborts_remaining(self, browser_session, base_url, tools):
-		"""Click a link that navigates to another page — remaining actions skipped."""
+		"""Click a link that navigates to another page - remaining actions skipped."""
 		await tools.navigate(url=f'{base_url}/page_a', new_tab=False, browser_session=browser_session)
 		await asyncio.sleep(0.5)
 
@@ -243,7 +243,7 @@ class TestRuntimeGuard:
 
 		results = await agent.multi_act(actions)
 
-		# Click navigated to page_b — runtime guard should stop at 1
+		# Click navigated to page_b - runtime guard should stop at 1
 		assert len(results) == 1, f'Expected 1 result but got {len(results)}: {results}'
 
 		# Verify we're on page_b
@@ -252,7 +252,7 @@ class TestRuntimeGuard:
 
 
 # ---------------------------------------------------------------------------
-# 4. Safe chain — multiple non-page-changing actions all execute
+# 4. Safe chain - multiple non-page-changing actions all execute
 # ---------------------------------------------------------------------------
 
 

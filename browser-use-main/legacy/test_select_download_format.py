@@ -1,12 +1,12 @@
 """
-select_download_format 工具单元测试（不使用大模型）
+select_download_format 工具单元测试(不使用大模型)
 
-测试策略：
+测试策略:
 - Mock browser_session 和 CDP 会话
-- 模拟 JavaScript 返回不同结果，验证工具的各分支逻辑
+- 模拟 JavaScript 返回不同结果,验证工具的各分支逻辑
 - 验证工具注册是否成功
 
-运行方式：
+运行方式:
     python test_select_download_format.py
     或
     python -m pytest test_select_download_format.py -v
@@ -42,14 +42,14 @@ from legacy.site_tools import (
 
 
 def run_async(coro):
-    """辅助函数：运行 async 函数"""
+    """辅助函数:运行 async 函数"""
     return asyncio.run(coro)
 
 
 def make_mock_browser_session(js_return_value):
     """
-    创建一个 mock 的 browser_session，
-    其 CDP evaluate 返回指定的 JS 结果。
+    创建一个 mock 的 browser_session,
+    其 CDP evaluate 返回指定的 JS 结果.
     """
     mock_session = AsyncMock()
     mock_cdp = AsyncMock()
@@ -65,7 +65,7 @@ def make_mock_browser_session(js_return_value):
 
 
 # ============================================================
-# 测试 1：工具注册验证
+# 测试 1:工具注册验证
 # ============================================================
 
 def test_tool_registered():
@@ -93,7 +93,7 @@ def test_tool_registered():
 
 
 # ============================================================
-# 测试 2：参数模型默认值
+# 测试 2:参数模型默认值
 # ============================================================
 
 def test_params_default():
@@ -112,7 +112,7 @@ def test_params_default():
 
 
 def test_extract_path_fallbacks_and_filename_safety():
-    """extract_page_to_markdown 对 agent 乱传的目录/文件名参数应自动纠正。"""
+    """extract_page_to_markdown 对 agent 乱传的目录/文件名参数应自动纠正."""
     original_base_dir = tools_registry.BASE_DIR
     original_allowed_dirs = list(tools_registry.ALLOWED_BASE_DIRS)
     with tempfile.TemporaryDirectory() as tmp:
@@ -143,7 +143,7 @@ def test_extract_path_fallbacks_and_filename_safety():
 
 
 def test_queue_tools_get_next_and_mark_status():
-    """队列工具应能返回 pending 项、标记 in_progress，并显式更新状态。"""
+    """队列工具应能返回 pending 项,标记 in_progress,并显式更新状态."""
     original_base_dir = tools_registry.BASE_DIR
     with tempfile.TemporaryDirectory() as tmp:
         base_dir = Path(tmp)
@@ -196,7 +196,7 @@ def test_queue_tools_get_next_and_mark_status():
 
 
 def test_wait_for_human_verification_resolves():
-    """人机验证工具应等待挑战页消失，而不是自动点击验证码。"""
+    """人机验证工具应等待挑战页消失,而不是自动点击验证码."""
     mock_session = AsyncMock()
     mock_cdp = AsyncMock()
     mock_cdp.session_id = "test-session-id"
@@ -240,7 +240,7 @@ def test_wait_for_human_verification_resolves():
 
 
 def test_rebuild_loc_download_state_cleans_queue():
-    """重建工具应合并队列、过滤无关项，并按下载记录重建状态。"""
+    """重建工具应合并队列,过滤无关项,并按下载记录重建状态."""
     original_base_dir = tools_registry.BASE_DIR
     with tempfile.TemporaryDirectory() as tmp:
         base_dir = Path(tmp)
@@ -285,7 +285,7 @@ def test_rebuild_loc_download_state_cleans_queue():
 
 
 def test_rebuild_reconciles_late_browser_download():
-    """重建状态时应把超时后才落盘的浏览器 TIFF 补记为成功。"""
+    """重建状态时应把超时后才落盘的浏览器 TIFF 补记为成功."""
     original_base_dir = tools_registry.BASE_DIR
     with tempfile.TemporaryDirectory() as tmp:
         base_dir = Path(tmp)
@@ -326,7 +326,7 @@ def test_rebuild_reconciles_late_browser_download():
 
 
 # ============================================================
-# 测试 3：成功选择 TIFF 格式
+# 测试 3:成功选择 TIFF 格式
 # ============================================================
 
 def test_success_tiff():
@@ -356,7 +356,7 @@ def test_success_tiff():
 
 
 def test_success_tiff_writes_title():
-    """Python 直接下载成功后立即把标题写入真实 title.txt。"""
+    """Python 直接下载成功后立即把标题写入真实 title.txt."""
     js_result = {
         'success': True,
         'selected_format': 'TIFF',
@@ -401,7 +401,7 @@ def test_success_tiff_writes_title():
 
 
 def test_direct_download_uses_browser_fallback():
-    """Python 直连 403 时，回退到浏览器点击下载并等待文件出现。"""
+    """Python 直连 403 时,回退到浏览器点击下载并等待文件出现."""
     js_result = {
         'success': True,
         'selected_format': 'TIFF',
@@ -459,7 +459,7 @@ def test_direct_download_uses_browser_fallback():
 
 
 # ============================================================
-# 测试 4：格式不存在（没有 TIFF）
+# 测试 4:格式不存在(没有 TIFF)
 # ============================================================
 
 def test_format_not_found():
@@ -487,7 +487,7 @@ def test_format_not_found():
 
 
 # ============================================================
-# 测试 5：页面中没有 select-resource 元素
+# 测试 5:页面中没有 select-resource 元素
 # ============================================================
 
 def test_no_select_element():
@@ -509,7 +509,7 @@ def test_no_select_element():
 
 
 # ============================================================
-# 测试 6：成功选择但 Go 按钮不存在
+# 测试 6:成功选择但 Go 按钮不存在
 # ============================================================
 
 def test_success_no_go_button():
@@ -529,12 +529,12 @@ def test_success_no_go_button():
     result = run_async(select_download_format(params=params, browser_session=mock_session))
     
     assert result.error is None
-    assert "未找到Go按钮，请手动点击" in result.extracted_content
+    assert "未找到Go按钮,请手动点击" in result.extracted_content
     print("✅ 测试 6 通过: 无 Go 按钮时提示手动点击")
 
 
 # ============================================================
-# 测试 7：JavaScript 执行异常
+# 测试 7:JavaScript 执行异常
 # ============================================================
 
 def test_js_exception():
@@ -559,7 +559,7 @@ def test_js_exception():
 
 
 # ============================================================
-# 测试 8：CDP 返回空数据
+# 测试 8:CDP 返回空数据
 # ============================================================
 
 def test_empty_response():
@@ -575,7 +575,7 @@ def test_empty_response():
 
 
 # ============================================================
-# 测试 9：大小写不敏感
+# 测试 9:大小写不敏感
 # ============================================================
 
 def test_case_insensitive():
@@ -601,7 +601,7 @@ def test_case_insensitive():
 
 
 # ============================================================
-# 测试 10：browser_session 连接异常
+# 测试 10:browser_session 连接异常
 # ============================================================
 
 def test_session_connection_error():

@@ -6,7 +6,7 @@ from pytest_httpserver import HTTPServer
 from browser_use.dom.markdown_extractor import chunk_markdown_by_structure
 
 # ---------------------------------------------------------------------------
-# Unit tests — synchronous, no browser needed
+# Unit tests - synchronous, no browser needed
 # ---------------------------------------------------------------------------
 
 
@@ -86,7 +86,7 @@ class TestChunkMarkdownHeaderPreferred:
 		header_b = '# Section B'
 		para_b = 'B' * 600
 		content = f'{header_a}\n\n{para_a}\n\n{header_b}\n\n{para_b}'
-		# With a limit of 700, header_b is near the start — splitting there would
+		# With a limit of 700, header_b is near the start - splitting there would
 		# leave a tiny prefix chunk. The algo should NOT split there.
 		chunks = chunk_markdown_by_structure(content, max_chunk_chars=700)
 		# First chunk should contain both headers (no tiny split)
@@ -100,7 +100,7 @@ class TestChunkMarkdownCodeFence:
 	def test_code_fence_not_split(self):
 		code_block = '```python\n' + 'x = 1\n' * 100 + '```'
 		content = '# Title\n\n' + code_block + '\n\n# Footer\n\nDone.'
-		# Limit smaller than the code block — it should still stay in one chunk (soft limit)
+		# Limit smaller than the code block - it should still stay in one chunk (soft limit)
 		chunks = chunk_markdown_by_structure(content, max_chunk_chars=50)
 		# Find the chunk containing the code block
 		code_chunks = [c for c in chunks if '```python' in c.content and '```' in c.content.split('```python')[1]]
@@ -291,7 +291,7 @@ class TestHTMLToMarkdownChunking:
 
 
 # ---------------------------------------------------------------------------
-# Integration tests — require browser + httpserver
+# Integration tests - require browser + httpserver
 # ---------------------------------------------------------------------------
 
 

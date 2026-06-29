@@ -1,4 +1,4 @@
-"""Tests for action loop detection — behavioral cycle breaking (PR #4)."""
+"""Tests for action loop detection - behavioral cycle breaking (PR #4)."""
 
 from browser_use.agent.service import Agent
 from browser_use.agent.views import (
@@ -90,7 +90,7 @@ def test_navigate_same_url_same_hash():
 
 
 def test_navigate_different_paths_different_hash():
-	"""Navigating to different paths on the same domain produces different hashes — this is genuine exploration."""
+	"""Navigating to different paths on the same domain produces different hashes - this is genuine exploration."""
 	h1 = compute_action_hash('navigate', {'url': 'https://example.com/page1'})
 	h2 = compute_action_hash('navigate', {'url': 'https://example.com/page2'})
 	assert h1 != h2
@@ -188,7 +188,7 @@ def test_detector_nudge_escalates_at_12_repeats():
 
 
 def test_detector_critical_message_no_done_directive():
-	"""Critical nudge should NOT tell the agent to call done — just a gentle heads up."""
+	"""Critical nudge should NOT tell the agent to call done - just a gentle heads up."""
 	detector = ActionLoopDetector(window_size=20)
 	for _ in range(12):
 		detector.record_action('search', {'query': 'site:hinative.com answers votes'})
@@ -199,7 +199,7 @@ def test_detector_critical_message_no_done_directive():
 
 
 def test_detector_first_nudge_no_cannot_complete():
-	"""First nudge should NOT say task 'cannot be completed' — just raise awareness."""
+	"""First nudge should NOT say task 'cannot be completed' - just raise awareness."""
 	detector = ActionLoopDetector(window_size=20)
 	for _ in range(5):
 		detector.record_action('search', {'query': 'site:hinative.com answers votes'})

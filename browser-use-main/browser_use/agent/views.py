@@ -132,7 +132,7 @@ def _normalize_action_for_hash(action_name: str, params: dict[str, Any]) -> str:
 
 	if action_name == 'navigate':
 		url = str(params.get('url', ''))
-		# Hash by full URL — navigating to different paths is genuine exploration,
+		# Hash by full URL - navigating to different paths is genuine exploration,
 		# only repeated navigation to the exact same URL is a loop signal.
 		return f'navigate|{url}'
 
@@ -155,7 +155,7 @@ def compute_action_hash(action_name: str, params: dict[str, Any]) -> str:
 class ActionLoopDetector(BaseModel):
 	"""Tracks action repetition and page stagnation to detect behavioral loops.
 
-	This is a soft detection system — it generates context messages for the LLM
+	This is a soft detection system - it generates context messages for the LLM
 	but never blocks actions. The agent can still repeat if it wants to.
 	"""
 

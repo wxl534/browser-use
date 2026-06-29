@@ -1,6 +1,6 @@
-"""`validate_download_completion` 工具：从 tools_registry.py 拆分而来。
+"""`validate_download_completion` 工具:从 tools_registry.py 拆分而来.
 
-共享 helper / 参数模型仍由 tools_registry 提供；运行时全局通过 tr.* 实时读取。
+共享 helper / 参数模型仍由 tools_registry 提供;运行时全局通过 tr.* 实时读取.
 """
 import tools_registry as tr
 from tools_registry import (
@@ -13,7 +13,7 @@ from tools_registry import (
 
 
 @tools.action(
-    description='最终校验下载结果，只根据 image_record.jsonl 和 ImagesCache 缓存目录生成确定性报告；done 前必须先调用它，不要让 agent 自己编统计。',
+    description='最终校验下载结果,只根据 image_record.jsonl 和 ImagesCache 缓存目录生成确定性报告;done 前必须先调用它,不要让 agent 自己编统计.',
     param_model=ValidateDownloadCompletionParams,
 )
 async def validate_download_completion(params: ValidateDownloadCompletionParams):

@@ -644,7 +644,7 @@ def ensure_cf_cookie(stop_event: threading.Event, *, force: bool = False, reason
     env = {**os.environ.copy(), 'PYTHONIOENCODING': 'utf-8', 'IDP_STORAGE_STATE': str(path)}
     try:
         proc = subprocess.run(
-            [python, str(BASE_DIR / 'fetch_cf_cookie.py')],
+            [python, str(BASE_DIR / 'scripts' / 'fetch_cf_cookie.py')],
             cwd=str(BASE_DIR),
             env=env,
             timeout=int(os.environ.get('IDP_CF_FETCH_TIMEOUT', '300')),
@@ -961,4 +961,3 @@ def main() -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
-

@@ -29,7 +29,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[1]
 TASK_FILE = BASE_DIR / 'task.md'
 TEMPLATE_FILE = BASE_DIR / 'task_template.md'
 CONFIG_FILE = BASE_DIR / 'task_config.json'

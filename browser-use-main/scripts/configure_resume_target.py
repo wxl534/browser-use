@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_CACHE_DIR = BASE_DIR / 'Images' / 'ImagesCache'
 TASK_FILE = BASE_DIR / 'task.md'
 

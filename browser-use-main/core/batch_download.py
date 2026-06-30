@@ -28,6 +28,40 @@ from concurrent_download import ConcurrentImageDownloader, image_download_concur
 # 站点状态文件 IO(按 adapter.site_id 命名)
 # ---------------------------------------------------------------------------
 
+def _parse_metadata_pairs(metadata_text: str) -> dict:
+    """把 ``'标签: 值; 标签2: 值2'`` 形式的 metadata 字符串解析回 {标签: 值} 字典."""
+    pairs: dict = {}
+    for chunk in str(metadata_text or '').split(';'):
+        chunk = chunk.strip()
+        if not chunk or ':' not in chunk:
+            continue
+        key, value = chunk.split(':', 1)
+        key = key.strip()
+        value = value.strip()
+        if key and value and key not in pairs:
+            pairs[key] = value
+    return pairs
+
+
+def _merge_overview_metadata(manifest_metadata: str, overview: dict) -> dict:
+    """
+    合并 IIIF manifest 的 metadata 与详情页 Overview,生成完整的结构化元数据.
+
+    详情页 Overview 优先(更全),manifest 中独有的字段(如 Reading Direction)
+    追加在后.两者皆为真实来源,绝不编造.
+    """
+    merged: dict = {}
+    for key, value in (overview or {}).items():
+        key = str(key).strip()
+        value = str(value).strip()
+        if key and value:
+            merged[key] = value
+    for key, value in _parse_metadata_pairs(manifest_metadata).items():
+        if key not in merged:
+            merged[key] = value
+    return merged
+
+
 def _site_progress_path(adapter: SiteAdapter, agent_data_dir: Path) -> Path:
     return agent_data_dir / adapter.progress_file_name
 
@@ -465,8 +499,19 @@ async def run_search_page_batch(
                     skipped.append(f'{page_url}: 未找到可下载图片')
                     continue
 
+                overview_meta: dict = {}
+                try:
+                    overview_meta = await adapter.resolve_item_detail_overview(browser_session, item) or {}
+                except Exception as exc:
+                    errors.append(f'{page_url}: 详情元数据解析失败(忽略): {exc}')
+                    overview_meta = {}
+                merged_overview = _merge_overview_metadata(resolution.metadata, overview_meta)
+
                 label = _normalize_title(resolution.label or str(item.get('title') or item.get('id') or f'{adapter.page_label()} item'))
-                metadata_text = (resolution.metadata or '').strip() or '未显示'
+                if merged_overview:
+                    metadata_text = '; '.join(f'{key}: {value}' for key, value in merged_overview.items())
+                else:
+                    metadata_text = (resolution.metadata or '').strip() or '未显示'
                 summary_text = (resolution.summary or label or f'{adapter.page_label()} official image').strip()
 
                 per_item_added = 0
@@ -485,6 +530,8 @@ async def run_search_page_batch(
                         'label': label,
                         'metadata': metadata_text,
                         'summary': summary_text,
+                        'overview': merged_overview,
+                        'source_page': current_page,
                     })
                     per_item_added += 1
 
@@ -570,6 +617,8 @@ async def run_search_page_batch(
                         evidence=evidence_text,
                         metadata=result['metadata'],
                         summary=result['summary'],
+                        overview=result.get('overview') or {},
+                        source_page=result.get('source_page'),
                         record_filename=params.record_filename,
                         info_filename=params.info_filename,
                         record_index=record_index,

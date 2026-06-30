@@ -92,7 +92,10 @@ def idp_item_id_from_urls(page_url: str, image_url: str = '') -> str:
 
 
 def _idp_progress_file() -> Path:
-    return AGENT_DATA_DIR / 'idp_progress.json'
+    # 用实时 AGENT_DATA_DIR(configure_runtime_paths 之后会更新),
+    # 否则会落到导入时捕获的 repo 默认目录,与 worker 写入的 run_dir/idp_progress.json 脱节。
+    import tools_registry as _tr
+    return _tr.AGENT_DATA_DIR / 'idp_progress.json'
 
 
 def _load_idp_progress() -> dict:

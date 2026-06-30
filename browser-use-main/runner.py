@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / 'core'))
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'scripts'))
 
 from configure_resume_target import DEFAULT_CACHE_DIR, TASK_FILE, configure_target, detect_task_target
-from idp_page_progress import select_next_page
+from idp_page_progress import reconcile_frontier_from_records, select_next_page
 from cache_layout import cache_has_content, cache_is_locked, process_is_running
 from task_parse import detect_search_keyword, keyword_changed, title_prefix_from_keyword
 
@@ -286,6 +286,15 @@ def sync_progress_from_page_queue(
     fallback_page: int,
 ) -> dict:
     keyword = detect_search_keyword(TASK_FILE.read_text(encoding='utf-8')) if TASK_FILE.exists() else 'china buddhist'
+    # 续跑自愈:先用 image_record.jsonl 的 source_page 重建页级 frontier,避免从低页重走已下载页.
+    reconciled = reconcile_frontier_from_records(
+        cache_dir,
+        keyword=keyword,
+        target_count=target_count,
+        max_reasonable_page=max_reasonable_page,
+    )
+    if reconciled:
+        fallback_page = max(fallback_page, int(reconciled.get('frontier') or fallback_page))
     active = select_next_page(
         cache_dir,
         keyword=keyword,

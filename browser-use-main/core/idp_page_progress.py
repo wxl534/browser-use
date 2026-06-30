@@ -163,6 +163,126 @@ def select_next_page(
     return progress['active']
 
 
+def _iter_record_source_pages(cache_dir: Path, record_file_name: str = 'image_record.jsonl'):
+    """逐行读 image_record.jsonl,产出每条记录里有效的 source_page(搜索页码)整数."""
+    path = cache_dir / record_file_name
+    if not path.exists():
+        return
+    try:
+        handle = open(path, encoding='utf-8')
+    except OSError:
+        return
+    with handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            raw = record.get('source_page')
+            try:
+                page = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if page >= 1:
+                yield page
+
+
+def reconcile_frontier_from_records(
+    cache_dir: Path,
+    *,
+    keyword: str = '',
+    target_count: int = 0,
+    record_file_name: str = 'image_record.jsonl',
+    max_reasonable_page: int = 200,
+) -> dict | None:
+    """
+    用 image_record.jsonl 里每条记录的 ``source_page`` 重建页级 frontier,自愈
+    ``idp_page_progress.json``,避免续跑时从低页逐页重走已下载页.
+
+    策略(只抬高下界,绝不回退):
+    - 收集所有有记录的搜索页 → frontier = 其最大值.
+    - 把 ``page < frontier`` 且有记录的页标记 ``done``(视为已消费,不再重走).
+    - ``[1, frontier)`` 区间内**无任何记录的空洞页**显式补成 ``pending``,让续跑
+      回头补扫一次(去重保证已下载的不重复;补扫后若 0 新增会被确定性判 done),
+      避免「中间页全是重复 → 0 记录 → 被永久跳过」的完整性漏洞.
+    - frontier 页保留/置为 ``in_progress`` 且 ``next_index=0``,让续跑只重扫这一页
+      补齐尾部 item(去重保证已下载的不会重复),完整性零损失.
+
+    返回 ``{'frontier': N, 'healed_pages': k, 'pages_with_records': m, 'gap_pages': g}``;
+    若没有任何带 ``source_page`` 的记录(老数据 / 空记录),返回 ``None``,调用方
+    退回到原有 select_next_page 行为.
+    """
+    pages_with_records = sorted({
+        page for page in _iter_record_source_pages(cache_dir, record_file_name)
+        if page <= max_reasonable_page
+    })
+    if not pages_with_records:
+        return None
+
+    frontier = pages_with_records[-1]
+    progress = load_page_progress(cache_dir)
+    if not progress:
+        progress = {
+            'keyword': keyword,
+            'target_count': target_count,
+            'active': {'page': frontier, 'next_index': 0},
+            'pages': [],
+            'created_at': utc_now(),
+        }
+    if keyword:
+        progress['keyword'] = keyword
+    if target_count:
+        progress['target_count'] = target_count
+
+    healed = 0
+    record_page_set = set(pages_with_records)
+    for page in pages_with_records:
+        state = _ensure_page_state(progress, page, status='pending')
+        if page < frontier:
+            if state.get('status') not in {'done', 'blocked'}:
+                state['status'] = 'done'
+                state['reason'] = 'reconciled_from_records'
+                state['next_index'] = 0
+                state['updated_at'] = utc_now()
+                healed += 1
+        else:
+            # frontier 页:保留为可续(in_progress)以补齐尾部 item;已 done 则不动.
+            if state.get('status') not in {'done', 'blocked'}:
+                state['status'] = 'in_progress'
+                state['next_index'] = 0
+                state['updated_at'] = utc_now()
+
+    # 补扫 [1, frontier) 区间内无任何记录的空洞页:显式补成 pending(若未处于终态),
+    # 让 select_next_page 回头补扫,杜绝中间页因全重复而 0 记录被永久跳过.
+    gap_pages = 0
+    for page in range(1, frontier):
+        if page in record_page_set:
+            continue
+        existing = _page_state(progress, page)
+        if existing is None:
+            _ensure_page_state(progress, page, status='pending')
+            gap_pages += 1
+        elif existing.get('status') not in {'done', 'blocked', 'in_progress', 'pending'}:
+            existing['status'] = 'pending'
+            existing['updated_at'] = utc_now()
+            gap_pages += 1
+
+    progress['frontier_from_records'] = frontier
+    progress['frontier_reconciled_at'] = utc_now()
+    write_page_progress(cache_dir, progress)
+    return {
+        'frontier': frontier,
+        'healed_pages': healed,
+        'pages_with_records': len(pages_with_records),
+        'gap_pages': gap_pages,
+    }
+
+
 def mark_page_batch_result(
     cache_dir: Path,
     *,

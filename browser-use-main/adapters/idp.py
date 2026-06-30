@@ -13,7 +13,35 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from adapters.base import SearchPageResult
+from adapters.detail_overview import fetch_detail_overview_in_browser
 from adapters.iiif import IIIFAdapter
+
+
+# IDP 详情页(idp.bl.uk/collection/{ID}/)是服务端渲染 HTML,Overview 字段以
+# label-value 形式排在 DOM 里——这正是通用详情引擎的 ``sections`` 模式.IDP 因此
+# 只是该引擎的一个「profile 实例」:页眉标题/材质 + 每个字段一个
+# .detaildropdown__section(<h4>标签</h4> + 值/facet 链接).引擎在浏览器上下文
+# 同源 fetch 该页(自动带 cf_clearance cookie 过 CF),DOMParser 确定性解析,绝不编造.
+_IDP_DETAIL_OVERVIEW_CONFIG = {
+    'mode': 'sections',
+    'section_selector': '.detaildropdown__section',
+    'label_selector': 'h4',
+    'header_fields': [
+        {'label': 'Pressmark', 'selector': '.collectionheader__pressmark h1'},
+        {'label': 'Material', 'selector': '.collectionheader__material h2'},
+    ],
+}
+
+
+def _idp_detail_url_for_item(item: dict) -> str:
+    """从 search item 推出详情页 URL(优先用 item['url'],兜底用 id 拼)."""
+    url = str(item.get('url') or '').strip()
+    if url:
+        return url
+    item_id = str(item.get('id') or '').strip().upper()
+    if re.fullmatch(r'[A-F0-9]{24,64}', item_id):
+        return f'https://idp.bl.uk/collection/{item_id}/'
+    return ''
 
 
 _IDP_SEARCH_EXTRACT_JS_TEMPLATE = r'''
@@ -174,3 +202,24 @@ class IDPAdapter(IIIFAdapter):
 
     def manifest_url_for_item(self, item: dict) -> str:
         return str(item.get('manifest_url') or '')
+
+    async def resolve_item_detail_overview(
+        self,
+        browser_session: Any,
+        item: dict,
+    ) -> dict:
+        """
+        抓取 IDP 详情页(idp.bl.uk/collection/{ID}/)的结构化 Overview 元数据.
+
+        IDP 的 IIIF manifest 只含 Pressmark/Description/Reading Direction 3 个
+        字段;Date/Find site/Measurement/Language/Subject/Institution/Provenance
+        等只在详情页 HTML 里.IDP 是通用详情引擎 ``sections`` 模式的一个 profile
+        实例(见 ``_IDP_DETAIL_OVERVIEW_CONFIG``),引擎在浏览器同源 fetch 该页
+        (自动带 cf_clearance cookie 过 CF),DOMParser 确定性解析,绝不编造.
+        失败优雅返回空 dict,不影响图片下载.
+        """
+        return await fetch_detail_overview_in_browser(
+            browser_session,
+            _idp_detail_url_for_item(item),
+            _IDP_DETAIL_OVERVIEW_CONFIG,
+        )

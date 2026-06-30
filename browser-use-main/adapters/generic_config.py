@@ -19,7 +19,18 @@ profile 字段(site_profiles/<site_id>.json)::
       "limit_param": "limit",
       "item_link_selector": "a[href*='/ark:/']",
       "item_id_regex": "/ark:/([0-9a-z/]+)",
-      "manifest_template": "https://gallica.bnf.fr/iiif/ark:/{id}/manifest.json"
+      "manifest_template": "https://gallica.bnf.fr/iiif/ark:/{id}/manifest.json",
+
+      // 可选:详情页 Overview 提取(manifest 元数据稀疏的站点才需要).
+      // 省略 = 只用 IIIF manifest 元数据(多数站点足够).详见 adapters/detail_overview.py.
+      "detail_overview": {
+        "mode": "sections",
+        "section_selector": ".detaildropdown__section",
+        "label_selector": "h4",
+        "header_fields": [{"label": "Title", "selector": "h1"}]
+      },
+      // 可选:详情页 URL 模板;省略 = 用 item 的链接 URL.
+      "detail_url_template": "https://gallica.bnf.fr/ark:/{id}"
     }
 """
 from __future__ import annotations
@@ -30,6 +41,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from adapters.base import SearchPageResult
+from adapters.detail_overview import fetch_detail_overview_in_browser
 from adapters.iiif import IIIFAdapter
 
 
@@ -181,3 +193,23 @@ class ConfigIIIFAdapter(IIIFAdapter):
 
     def manifest_url_for_item(self, item: dict) -> str:
         return str(item.get('manifest_url') or '')
+
+    def _detail_url_for_item(self, item: dict) -> str:
+        """详情页 URL:优先 detail_url_template.format(id=...),否则用 item 链接 URL."""
+        template = str(self._p.get('detail_url_template') or '').strip()
+        item_id = str(item.get('id') or '').strip()
+        if template and item_id:
+            try:
+                return template.format(id=item_id)
+            except (KeyError, IndexError):
+                pass
+        return str(item.get('url') or '').strip()
+
+    async def resolve_item_detail_overview(self, browser_session: Any, item: dict) -> dict:
+        """profile 驱动的详情页 Overview 提取(配置在 profile.detail_overview);未配置则返回 {}."""
+        config = self._p.get('detail_overview')
+        if not isinstance(config, dict) or not config:
+            return {}
+        return await fetch_detail_overview_in_browser(
+            browser_session, self._detail_url_for_item(item), config
+        )

@@ -20,7 +20,7 @@ from browser_use import Agent, Browser, ChatOpenAI
 from browser_use.browser import ProxySettings
 from browser_use.llm.exceptions import ModelAuthBlockedError
 from browser_use.llm.messages import UserMessage
-from idp_page_progress import select_next_page
+from idp_page_progress import reconcile_frontier_from_records, select_next_page
 from task_parse import (
     extract_search_keyword,
     extract_target_image_count,
@@ -418,6 +418,20 @@ def sync_idp_progress_from_page_queue(run_dir: Path, target_image_count: int, se
         max_reasonable_page = max(1, int(max_page_text)) if max_page_text else max(fallback_page, (target_image_count // 25) + 20)
     except ValueError:
         max_reasonable_page = max(fallback_page, (target_image_count // 25) + 20)
+    # 续跑自愈:先用 image_record.jsonl 的 source_page 重建页级 frontier,避免从低页重走已下载页.
+    reconciled = reconcile_frontier_from_records(
+        run_dir,
+        keyword=search_keyword,
+        target_count=target_image_count,
+        max_reasonable_page=max_reasonable_page,
+    )
+    if reconciled:
+        fallback_page = max(fallback_page, int(reconciled.get('frontier') or fallback_page))
+        print(
+            f"🧭 已从 image_record.jsonl 重建页级 frontier：frontier=page {reconciled['frontier']}，"
+            f"标记 {reconciled['healed_pages']} 个已完成页(共 {reconciled['pages_with_records']} 个有记录页)，"
+            f"补扫 {reconciled.get('gap_pages', 0)} 个空洞页"
+        )
     active = select_next_page(
         run_dir,
         keyword=search_keyword,

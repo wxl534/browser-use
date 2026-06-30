@@ -139,6 +139,22 @@ class SiteAdapter(ABC):
     ) -> ItemImageResolution:
         """根据单个 item 解析出可直接下载的图片 URL(以及 label/metadata/summary)."""
 
+    async def resolve_item_detail_overview(
+        self,
+        browser_session: Any,
+        item: dict,
+    ) -> dict:
+        """
+        可选:抓取单个 item **详情页**的结构化 Overview 元数据,返回
+        ``{展示标签: 值}`` 字典(例如 ``{'Date': '...', 'Find site': '...'}``).
+
+        默认实现为空(返回 ``{}``),即不做额外详情抓取——这样对"完整元数据
+        已在 IIIF manifest 里"的站点零开销.对 manifest 元数据稀疏的站点
+        (如 IDP),子类可覆盖本方法,在浏览器上下文里 fetch 详情页 HTML 并
+        确定性解析(零 LLM,绝不编造).
+        """
+        return {}
+
     # ---------- 杂项 ----------
 
     def default_host_suffixes(self) -> list[str]:

@@ -1362,6 +1362,215 @@ def test_generic_config_adapter():
         results.fail('registry.resolve_adapter', '未回退到 IDPAdapter')
 
 
+def test_navigate_page_guard():
+    """防跳页守卫:navigate_idp_search_page 只能在 current_page 基础上顺序 +1,禁止跳到极深页。"""
+    print('\n📋 测试翻页防跳页守卫')
+
+    import tools_registry
+    from tool_actions.navigate_idp_search_page import _guard_idp_page, GUARD_MAX_PAGE
+
+    old_base = tools_registry.BASE_DIR
+    old_image_dir = tools_registry.IMAGE_DIR
+    old_data_dir = tools_registry.AGENT_DATA_DIR
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = Path(tmp) / 'Images' / 'ImagesCache'
+        run_dir.mkdir(parents=True)
+        tools_registry.configure_runtime_paths(run_dir, run_dir, run_dir)
+        progress_file = run_dir / 'idp_progress.json'
+        try:
+            allowed, current = _guard_idp_page(500)
+            if current == 0 and allowed == GUARD_MAX_PAGE:
+                results.ok('无进度时跳页被封顶到 GUARD_MAX_PAGE')
+            else:
+                results.fail('无进度封顶', f'allowed={allowed}, current={current}')
+
+            progress_file.write_text(json.dumps({'current_page': 16}), encoding='utf-8')
+            allowed, _ = _guard_idp_page(500)
+            if allowed == 17:
+                results.ok('current_page=16 时 page=500 被夹到 17(顺序+1)')
+            else:
+                results.fail('顺序+1 守卫', f'期望 17，得到 {allowed}')
+
+            allowed, _ = _guard_idp_page(17)
+            if allowed == 17:
+                results.ok('顺序 +1 的正常翻页放行')
+            else:
+                results.fail('正常翻页放行', f'期望 17，得到 {allowed}')
+
+            progress_file.write_text(json.dumps({'current_page': 120}), encoding='utf-8')
+            allowed, _ = _guard_idp_page(121)
+            if allowed == 121:
+                results.ok('续跑深页 current_page=120 允许顺序到 121')
+            else:
+                results.fail('续跑深页', f'期望 121，得到 {allowed}')
+        finally:
+            tools_registry.BASE_DIR = old_base
+            tools_registry.IMAGE_DIR = old_image_dir
+            tools_registry.AGENT_DATA_DIR = old_data_dir
+
+
+def test_detail_overview_metadata():
+    """详情页 Overview 元数据:合并逻辑 + 通用引擎 config + IDP/Config 适配器接线。"""
+    print('\n📋 测试详情页 Overview 元数据提取')
+
+    import asyncio
+    from batch_download import _merge_overview_metadata, _parse_metadata_pairs
+    from adapters.idp import IDPAdapter, _idp_detail_url_for_item, _IDP_DETAIL_OVERVIEW_CONFIG
+    from adapters.detail_overview import build_detail_overview_js, overview_config_is_active
+    from adapters.generic_config import ConfigIIIFAdapter
+
+    # 1) manifest 字符串解析回字典
+    pairs = _parse_metadata_pairs('Pressmark: P1; Reading Direction: Left to right')
+    if pairs == {'Pressmark': 'P1', 'Reading Direction': 'Left to right'}:
+        results.ok('_parse_metadata_pairs 正确解析 manifest 元数据串')
+    else:
+        results.fail('_parse_metadata_pairs', str(pairs))
+
+    # 2) 合并:overview 优先,manifest 独有字段保留
+    overview = {'Date': '1084 to 1225', 'Pressmark': 'Tang.334/156'}
+    manifest = 'Pressmark: P1; Reading Direction: Left to right'
+    merged = _merge_overview_metadata(manifest, overview)
+    if (merged.get('Date') == '1084 to 1225'
+            and merged.get('Pressmark') == 'Tang.334/156'
+            and merged.get('Reading Direction') == 'Left to right'):
+        results.ok('_merge_overview_metadata 详情优先并保留 manifest 独有字段')
+    else:
+        results.fail('_merge_overview_metadata', str(merged))
+
+    if _merge_overview_metadata('', {}) == {}:
+        results.ok('_merge_overview_metadata 两者皆空时返回空字典')
+    else:
+        results.fail('_merge_overview_metadata 空输入', '非空')
+
+    # 3) 通用引擎 config 有效性判定(manifest_only/空 => 不抓详情)
+    active = (
+        overview_config_is_active({'mode': 'sections', 'section_selector': '.x'})
+        and overview_config_is_active({'mode': 'dl'})
+        and overview_config_is_active({'mode': 'table'})
+        and overview_config_is_active({'header_fields': [{'label': 'T', 'selector': 'h1'}]})
+    )
+    inactive = (
+        not overview_config_is_active(None)
+        and not overview_config_is_active({})
+        and not overview_config_is_active({'mode': 'manifest_only', 'section_selector': '.x'})
+        and not overview_config_is_active({'mode': 'sections'})  # 缺 section_selector
+    )
+    if active and inactive:
+        results.ok('overview_config_is_active 正确区分需/不需抓详情的 config')
+    else:
+        results.fail('overview_config_is_active', f'active={active}, inactive={inactive}')
+
+    # 4) 通用 JS 模板把 URL + config 安全注入,且 IDP config 走 sections 模式
+    js = build_detail_overview_js('https://idp.bl.uk/collection/X/', _IDP_DETAIL_OVERVIEW_CONFIG)
+    if ('"https://idp.bl.uk/collection/X/"' in js
+            and 'detaildropdown__section' in js
+            and 'collectionheader__pressmark' in js
+            and 'DOMParser' in js):
+        results.ok('build_detail_overview_js 注入 URL+config 且含通用解析逻辑')
+    else:
+        results.fail('build_detail_overview_js', '模板不含预期内容')
+
+    # 5) IDP 详情 URL 推导
+    u1 = _idp_detail_url_for_item({'url': 'https://idp.bl.uk/collection/ABC/'})
+    u2 = _idp_detail_url_for_item({'id': '4692BA14CC3B475BBEFFB48226F1E177'})
+    u3 = _idp_detail_url_for_item({'id': 'not-a-hash'})
+    if u1 == 'https://idp.bl.uk/collection/ABC/' and u2.endswith('/collection/4692BA14CC3B475BBEFFB48226F1E177/') and u3 == '':
+        results.ok('_idp_detail_url_for_item 正确推导/兜底详情 URL')
+    else:
+        results.fail('_idp_detail_url_for_item', f'{u1} | {u2} | {u3}')
+
+    # 6) 浏览器异常时,IDP 与 Config 适配器都优雅降级为 {}
+    class _BoomSession:
+        async def get_or_create_cdp_session(self):
+            raise RuntimeError('no browser in test')
+
+    idp = IDPAdapter()
+    idp_empty = asyncio.run(idp.resolve_item_detail_overview(_BoomSession(), {'url': 'https://idp.bl.uk/collection/X/'}))
+
+    profile = {
+        'site_id': 'demo', 'item_link_selector': "a[href*='/item/']",
+        'item_id_regex': '/item/([0-9a-f]+)', 'manifest_template': 'https://demo.org/iiif/{id}/manifest.json',
+        'detail_overview': {'mode': 'sections', 'section_selector': '.field', 'label_selector': 'h4'},
+        'detail_url_template': 'https://demo.org/item/{id}',
+    }
+    cfg_adapter = ConfigIIIFAdapter(profile)
+    cfg_url = cfg_adapter._detail_url_for_item({'id': 'ab12', 'url': 'https://demo.org/x'})
+    cfg_empty = asyncio.run(cfg_adapter.resolve_item_detail_overview(_BoomSession(), {'id': 'ab12'}))
+    # 未配置 detail_overview 的 profile => 直接返回 {}
+    profile_no_detail = dict(profile); profile_no_detail.pop('detail_overview')
+    cfg_no_detail = asyncio.run(ConfigIIIFAdapter(profile_no_detail).resolve_item_detail_overview(_BoomSession(), {'id': 'ab12'}))
+
+    if (idp_empty == {} and cfg_empty == {} and cfg_no_detail == {}
+            and cfg_url == 'https://demo.org/item/ab12'):
+        results.ok('IDP/Config 详情提取:URL 模板正确 + 异常/未配置优雅降级 {}')
+    else:
+        results.fail('详情提取降级', f'{idp_empty}|{cfg_empty}|{cfg_no_detail}|{cfg_url}')
+
+
+def test_frontier_reconciliation():
+    """续跑自愈:用 image_record.jsonl 的 source_page 重建页级 frontier,避免重走已下载页。"""
+    print('\n📋 测试续跑 frontier 重建')
+
+    from idp_page_progress import reconcile_frontier_from_records, select_next_page, load_page_progress
+
+    # 1) 有 source_page 记录 → 重建 frontier,低页标 done,frontier 页保留可续
+    with tempfile.TemporaryDirectory() as tmp:
+        cache = Path(tmp)
+        (cache / 'image_record.jsonl').write_text(
+            '{"status":"downloaded","sequence":1,"source_page":1}\n'
+            '{"status":"downloaded","sequence":2,"source_page":2}\n'
+            '{"status":"downloaded","sequence":3,"source_page":3}\n'
+            '{"status":"downloaded","sequence":4,"source_page":3}\n'
+            '{"status":"downloaded","sequence":5}\n'  # 老数据无 source_page,忽略
+            , encoding='utf-8',
+        )
+        info = reconcile_frontier_from_records(cache, keyword='kw', target_count=100, max_reasonable_page=200)
+        if info and info['frontier'] == 3 and info['healed_pages'] == 2 and info['pages_with_records'] == 3:
+            results.ok('reconcile 从 source_page 正确算出 frontier 并标记已完成页')
+        else:
+            results.fail('frontier 重建', str(info))
+
+        progress = load_page_progress(cache)
+        states = {int(p['page']): p['status'] for p in progress.get('pages', [])}
+        if states.get(1) == 'done' and states.get(2) == 'done' and states.get(3) == 'in_progress':
+            results.ok('低页标 done、frontier 页保留 in_progress(可续扫补尾)')
+        else:
+            results.fail('页状态', str(states))
+
+        # select_next_page 应直接选 frontier 页 3,而非从 page 1 重走
+        active = select_next_page(cache, keyword='kw', target_count=100, fallback_page=1, max_reasonable_page=200)
+        if active['page'] == 3:
+            results.ok('select_next_page 续跑直达 frontier 页,跳过已下载低页')
+        else:
+            results.fail('续跑直达 frontier', f'active={active}')
+
+    # 2) 无 source_page 记录(老数据/空)→ 返回 None,退回原行为
+    with tempfile.TemporaryDirectory() as tmp2:
+        cache2 = Path(tmp2)
+        (cache2 / 'image_record.jsonl').write_text('{"status":"downloaded","sequence":1}\n', encoding='utf-8')
+        if reconcile_frontier_from_records(cache2, keyword='kw', target_count=100) is None:
+            results.ok('无 source_page 记录时 reconcile 返回 None(安全退回)')
+        else:
+            results.fail('无 source_page 退回', '应为 None')
+
+    # 3) 空洞页补扫:记录在 {1,4} → frontier=4,中间 page 2/3 无记录应补 pending 回头补扫
+    with tempfile.TemporaryDirectory() as tmp3:
+        cache3 = Path(tmp3)
+        (cache3 / 'image_record.jsonl').write_text(
+            '{"status":"downloaded","sequence":1,"source_page":1}\n'
+            '{"status":"downloaded","sequence":2,"source_page":4}\n',
+            encoding='utf-8',
+        )
+        info3 = reconcile_frontier_from_records(cache3, keyword='kw', target_count=100, max_reasonable_page=200)
+        states3 = {int(p['page']): p['status'] for p in load_page_progress(cache3).get('pages', [])}
+        if info3 and info3['frontier'] == 4 and info3.get('gap_pages') == 2 \
+                and states3.get(1) == 'done' and states3.get(2) == 'pending' \
+                and states3.get(3) == 'pending' and states3.get(4) == 'in_progress':
+            results.ok('空洞页(无记录的中间页)补成 pending,确保回头补扫不漏页')
+        else:
+            results.fail('空洞页补扫', f'info={info3} states={states3}')
+
+
 def main():
     print('=' * 60)
     print('  main.py 功能测试(不调用大模型)')
@@ -1399,6 +1608,9 @@ def main():
     test_end_to_end_mock()
     test_idp_batch_adapter()
     test_generic_config_adapter()
+    test_navigate_page_guard()
+    test_detail_overview_metadata()
+    test_frontier_reconciliation()
 
     all_passed = results.summary()
     sys.exit(0 if all_passed else 1)

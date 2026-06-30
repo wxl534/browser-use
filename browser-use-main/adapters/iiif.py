@@ -120,6 +120,23 @@ def _build_manifest_fetch_js(manifest_url: str) -> str:
     )
 
 
+async def evaluate_js_in_browser(browser_session: Any, js_code: str) -> Any:
+    """
+    在当前浏览器上下文里执行一段 JS(``returnByValue`` + ``awaitPromise``),
+    返回其求值结果.适配器需要在页面里 fetch/解析 DOM 时复用本 helper.
+
+    JS 抛异常时抛 ``RuntimeError``.
+    """
+    cdp_session = await browser_session.get_or_create_cdp_session()
+    result = await cdp_session.cdp_client.send.Runtime.evaluate(
+        params={'expression': js_code, 'returnByValue': True, 'awaitPromise': True},
+        session_id=cdp_session.session_id,
+    )
+    if result.get('exceptionDetails'):
+        raise RuntimeError(result['exceptionDetails'].get('text', '浏览器内 JS 执行失败'))
+    return result.get('result', {}).get('value')
+
+
 async def fetch_iiif_manifest_in_browser(browser_session: Any, manifest_url: str) -> dict:
     """
     在当前浏览器上下文里 fetch + 解析一个 IIIF manifest.

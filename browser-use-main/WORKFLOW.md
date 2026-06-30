@@ -71,6 +71,15 @@ scripts/fetch_cf_cookie.py (Scrapling 隔离环境) → cf_storage.json → work
 - `cf_clearance` **绑出口 IP + 轻度绑 UA**：取证与主程序必须同出口 IP；UA 写入 `_meta` 供注入对齐。
 - 过期 30 分钟~数小时；退出码 0=拿到、2=无（IP 信誉差需住宅代理）。
 
+### 3.1 实测复盘：谁才是真正过 CF 的功臣（2026-06-30 5000 张长跑）
+
+一次 5000 张 `china buddhist` 的完整跑（`info.log`，03:17→08:49，5000/5000 达标）实证了反CF 各路径的实际分工：
+
+- **预注入 `cf_clearance`（主路径）才是真正建功的**。运行中途偶发再弹 CF 时，靠的是这张预注入通行证在等待窗口内生效 / 页面 settle 后放行。Agent 自身 Memory 也写明 *"bypassed automatically (cf_clearance cookie was pre-injected)"*。
+- **`wait_for_human_verification` 的 `auto_click` 兜底被触发但未建功**。从 `tool_actions/wait_for_human_verification.py:32-47` 逻辑反推：若 `_attempt_cloudflare_autoclick` 成功会**立即**返回"已自动点击通过"；而实测该调用**耗满整个 30s timeout**（03:19:00→03:19:30），证明 `auto_clicked=False`，代码跌进第 49 行被动轮询分支，靠等通行证生效而非 CDP 点 Turnstile 复选框过关。
+- **结论与既有认知一致**：Turnstile 按后台指纹 + IP 信誉判定，CDP/视觉自动点击无法绕过。所以 `auto_click` 只是"单击放行"型的偶发兜底，**不可依赖**；长稳的根基始终是 Scrapling 预注入通行证 + 同出口 IP（必要时住宅代理）。
+- **排查提示**：该工具内部不打 `[tools]` 日志，只通过 `ActionResult` 返回文本；故日志里查不到 auto_click 细节属正常，**不能据此判断它没运行**。判断是否真跑，看调用前后的 wall-clock 间隔——耗满 timeout = 走了被动轮询、auto_click 没成。
+
 ---
 
 ## 4. 单轮入口：`worker.py`（旧名 main.py）
@@ -127,7 +136,10 @@ scripts/fetch_cf_cookie.py (Scrapling 隔离环境) → cf_storage.json → work
 ## 8. 站点插件 & 下载基建
 - **`sites/idp.py`** — 通过 `register_download_site_hint` 注入逐 item 兜底工具的 IDP 提示,核心 registry 无硬编码。
 - **`core/concurrent_download.py`** — 共享 aiohttp 会话 + Semaphore 并发池（默认 4，`BROWSER_USE_IMAGE_DOWNLOAD_CONCURRENCY` 可调）。
-- **`core/idp_page_progress.py`** — `mark_page_batch_result` 维护 page 队列 + next_page/next_index。
+- **`core/idp_page_progress.py`** — `mark_page_batch_result` 维护 page 队列 + next_page/next_index；`reconcile_frontier_from_records` 续跑自愈:用 `image_record.jsonl` 每条记录的 `source_page` 重建页级 frontier(`< frontier` 的页标 `done`,frontier 页留 `in_progress` 让续跑去重补尾,**`[1,frontier)` 内无记录的空洞页补 `pending` 回头补扫**杜绝中间页全重复被永久跳过),**即使页队列丢失/落后也能从图片级事实来源恢复真实进度**,杜绝从低页逐页重走已下载页(0 新增 → LLM 跳深页的根因)。
+- **每条图片记录新增 `source_page` 字段**(`core/batch_download.py` 盖上当前搜索页码 → `core/tools_registry.py` `_record_saved_image_fast` 落库),是 frontier 重建的依据。续跑入口 `worker.sync_idp_progress_from_page_queue` / `runner.sync_progress_from_page_queue` 在 `select_next_page` 前先调用 reconcile。
+- **`tool_actions/navigate_idp_search_page.py`** — 翻页工具内置**防跳页守卫** `_guard_idp_page`：LLM 传入的 `page` 会被夹到 `[1, min(current_page+1, 200)]`，杜绝「page 8 → page 500」式跳页（current_page 取自 `idp_progress.json`，续跑时由 `select_next_page` 写入，故深页续跑仍可顺序起步）。某页 0 新增由确定性队列自动 +1 推进，不需要、也不允许 agent 手动跳深页。
+- **`sites/idp.py`** — `_idp_progress_file()` 改用**实时** `AGENT_DATA_DIR`（修复导入时静态捕获导致的脱节 bug：此前工具的 `idp_progress.json` 落到 repo 默认 `browseruse_agent_data/`，与 worker 写的 `run_dir/ImagesCache/idp_progress.json` 不是同一文件，跨 run 残留还会让守卫失效）。
 - **`core/tools_registry.py`** — 全部工具注册、记录/去重/校验/finish 等共享基建。
 
 ---
@@ -158,8 +170,15 @@ scripts/fetch_cf_cookie.py (Scrapling 隔离环境) → cf_storage.json → work
 ### C. 图片信息提取逻辑
 
 - 批量:`adapters/iiif.py` fetch manifest → `label`/`summary`/`metadata`(metadata 数组拼成 `k: v;`)。
-- 字段最终写入 record:`evidence`(关键词相关性,模板)、`metadata`、`summary`、`collection_title`、`page_url`、`image_url`。
+- **详情页 Overview 补充(零 LLM,确定性,跨站通用)**:IIIF manifest 的 metadata 在不同站点丰俭不一(IDP 只放 Pressmark/Description/Reading Direction 3 个字段,详情页却有 Date/Find site/Measurement/Language/Subject/Institution/Provenance)。为不丢字段,`SiteAdapter` 新增可选钩子 `resolve_item_detail_overview`(base 默认返回 `{}`,零开销)。
+  - **通用引擎** `adapters/detail_overview.py`:配置驱动,支持 3 种最常见的画廊站详情 DOM 模式——`sections`(容器+标签+值,如 IDP 的 `.detaildropdown__section`)、`dl`(`<dt>/<dd>`)、`table`(`<th>/<td>`),外加 `header_fields`(页眉零散字段)。在浏览器同源 fetch 详情页(自动带 cf_clearance cookie 过 CF),`DOMParser` 确定性解析。**SSR HTML,字段真实,绝不编造**;任何失败优雅降级 `{}`,不影响下载。
+  - **IDP 是该引擎的一个 profile 实例**(`adapters/idp.py` 的 `_IDP_DETAIL_OVERVIEW_CONFIG`:sections 模式 + `.detaildropdown__section`/`h4` + 页眉 Pressmark/Material)。
+  - **任意 IIIF 站点**用 `ConfigIIIFAdapter`(`adapters/generic_config.py`)时,只需在 profile 加 `detail_overview` 段(mode/section_selector/label_selector/value_selector/header_fields)+ 可选 `detail_url_template` 即可零代码接入;不配则只用 manifest 元数据。
+  - 通用 helper `evaluate_js_in_browser`(`adapters/iiif.py`)封装 CDP `Runtime.evaluate`。
+- **合并**:`core/batch_download.py` 的 `_merge_overview_metadata` 把详情 Overview(优先)与 manifest metadata(补 Reading Direction 等独有字段)合成完整 `metadata` 串;同时把结构化 `overview` 字典写入 `image_record.jsonl`(供数据库消费)。
+- 字段最终写入 record:`evidence`(关键词相关性,模板)、`metadata`(详情 Overview+manifest 合并)、`overview`(结构化字典)、`summary`、`collection_title`、`page_url`、`image_url`。
 - 逐 item 兜底:`extract_page_to_markdown`（legacy/）从详情页 DOM 抽。
+- **通用化方向**:`resolve_item_detail_overview` 是按站点可插拔的"详情元数据补充器",已由 `adapters/detail_overview.py` 通用引擎(sections/dl/table 三模式 + header_fields)驱动。IDP 与任意 `ConfigIIIFAdapter` 站点都只是 profile 配置;manifest 已含完整描述的站点(多数 IIIF 站)无需配置,零成本。
 
 ### D. 重命名逻辑（关键,常出问题）
 
@@ -183,9 +202,9 @@ scripts/fetch_cf_cookie.py (Scrapling 隔离环境) → cf_storage.json → work
 
 | 文件 | 作用 |
 |---|---|
-| `image_record.jsonl` | 每图一条：序号/文件名/标题/URL/hash，去重与续跑依据 |
+| `image_record.jsonl` | 每图一条：序号/文件名/标题/URL/hash/**source_page**/overview，去重、续跑、frontier 重建依据 |
 | `idp_progress.json` | next_page/next_index，续跑唯一可信源 |
-| `idp_page_progress.json` | 每页统计 |
+| `idp_page_progress.json` | 每页统计 + frontier(可由 source_page 自愈重建) |
 | `temple_photo_info.md` | 由记录重写的可读信息表 |
 | `cf_storage.json` | cf_clearance 通行证 |
 

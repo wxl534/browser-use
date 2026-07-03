@@ -192,8 +192,10 @@ async def main():
         keep_alive=True,  # 保持浏览器存活,让多个智能体共享会话
     )
 
-    api_key = '9c2fcf1e-afc3-4dc4-8b7e-636cdac31519'
-    base_url = 'https://openapi.seu.edu.cn/v1'
+    api_key = os.getenv('OPENAI_API_KEY', '').strip()
+    if not api_key:
+        raise RuntimeError('Set OPENAI_API_KEY environment variable; do NOT hardcode API keys in source code')
+    base_url = os.getenv('OPENAI_BASE_URL', 'https://openapi.seu.edu.cn/v1')
 
     llm = ChatOpenAI(
         model='qwen3.5-397b-a17b',

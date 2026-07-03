@@ -25,7 +25,7 @@
   },
   "integrations": {
     "posthog": {
-      "apiKey": "phc_F8JMNjW1i2KbGUTaW1unnDdLSPCoyc52SGRU0JecaUh"
+    "apiKey": ""
     }
   },
   "redirects": [

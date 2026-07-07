@@ -68,10 +68,31 @@ _DETAIL_OVERVIEW_JS_TEMPLATE = r'''
             return '';
         };
 
+        // honor explicitly configured header_fields first
         for (const hf of (cfg.header_fields || [])) {
             if (!hf || !hf.selector || !hf.label) continue;
             const el = doc.querySelector(hf.selector);
             if (el) put(hf.label, el.textContent);
+        }
+
+        // AUTO-DETECT common header/title/pressmark if not provided
+        try {
+            // common selectors seen on museum/gallery sites
+            const press = doc.querySelector('.collectionheader__pressmark h1, .collectionheader h1, .pressmark, .collection-pressmark, .collectionheader__pressmark');
+            if (press) put('Pressmark', clean(press.textContent));
+
+            const titleEl = doc.querySelector('h1, h2');
+            if (titleEl) put('Title', clean(titleEl.textContent));
+
+            // try to detect short identifier like F1982.2 (heuristic)
+            const potential = Array.from(doc.querySelectorAll('h1, h2, h3, .pressmark, .collectionheader__pressmark, .collectionheader')).map(e=>clean(e.textContent));
+            const idRe = /\b[A-Z][-A-Z0-9]{2,}\.?\d+\b/; // loose heuristic
+            for (const t of potential) {
+                const m = (t || '').match(idRe);
+                if (m) { put('Identifier', m[0]); break; }
+            }
+        } catch (e) {
+            // non-fatal
         }
 
         const mode = cfg.mode || 'sections';
@@ -91,24 +112,39 @@ _DETAIL_OVERVIEW_JS_TEMPLATE = r'''
                 if (th && td) put(th.textContent, td.textContent);
             }
         } else {
-            const sectionSel = cfg.section_selector;
+            // flexible default selectors: many detail pages use .detaildropdown__section or similar
+            const sectionSel = cfg.section_selector || '.detaildropdown__section, .detail-section, .detail-section__item, .metadata__item, .detaildropdown__row, dl';
             const labelSel = cfg.label_selector || 'h4';
-            if (sectionSel) {
-                for (const sec of doc.querySelectorAll(sectionSel)) {
-                    const lbl = sec.querySelector(labelSel);
+
+            // try to parse sections using the section selector(s)
+            for (const sel of sectionSel.split(',')) {
+                const s = sel.trim();
+                if (!s) continue;
+                for (const sec of doc.querySelectorAll(s)) {
+                    const lbl = sec.querySelector(labelSel) || sec.querySelector('strong') || sec.querySelector('b');
                     if (!lbl) continue;
                     const label = clean(lbl.textContent);
                     if (!label) continue;
                     let value = valueOf(sec, cfg.value_selector);
                     if (!value) {
                         const clone = sec.cloneNode(true);
-                        const lc = clone.querySelector(labelSel);
+                        const lc = clone.querySelector(labelSel) || clone.querySelector('strong') || clone.querySelector('b');
                         if (lc) lc.remove();
                         value = clean(clone.textContent);
                     }
                     put(label, value);
                 }
             }
+
+            // As a fallback: search for dl > dt/dd pairs anywhere
+            try {
+                for (const dl of doc.querySelectorAll('dl')) {
+                    const dts = dl.querySelectorAll('dt');
+                    const dds = dl.querySelectorAll('dd');
+                    const n = Math.min(dts.length, dds.length);
+                    for (let i = 0; i < n; i++) put(dts[i].textContent, dds[i].textContent);
+                }
+            } catch (e) { /* ignore */ }
         }
         return {success: true, detail_url: detailUrl, overview, order, field_count: order.length};
     } catch (error) {

@@ -76,6 +76,58 @@ def _build_proxy_from_env() -> ProxySettings | None:
     )
 
 
+def _ensure_storage_state_valid() -> str | None:
+    """确保 IDP_STORAGE_STATE 指向的 storage_state 存在且 cf_clearance 未过期.
+
+    如果 storage_state 缺失或已过期，尝试用 scripts/fetch_cf_cookie.py 刷新（若存在）。
+    返回有效的 storage_state 路径或 None。
+    """
+    path = os.environ.get('IDP_STORAGE_STATE', '').strip()
+    if not path:
+        return None
+    p = Path(path)
+    def is_valid_file(pth: Path) -> bool:
+        try:
+            j = json.loads(pth.read_text(encoding='utf-8'))
+            meta = j.get('_meta') or {}
+            exp = meta.get('cf_clearance_expires')
+            if isinstance(exp, (int, float)) and exp > time.time():
+                return True
+        except Exception:
+            return False
+        return False
+
+    if p.exists() and is_valid_file(p):
+        # valid
+        return str(p)
+
+    # Try to refresh using fetch_cf_cookie.py if available
+    script = BASE_DIR / 'scripts' / 'fetch_cf_cookie.py'
+    if script.exists():
+        print('🔁 cf_clearance 缺失或过期，尝试运行 scripts/fetch_cf_cookie.py 刷新...')
+        try:
+            proc = subprocess.run([sys.executable, str(script)], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+            try:
+                out = proc.stdout.decode('utf-8', errors='ignore')
+                err = proc.stderr.decode('utf-8', errors='ignore')
+                if out:
+                    print(out)
+                if err:
+                    print(err)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f'⚠️ 运行 fetch_cf_cookie.py 失败: {e}')
+
+    # re-check
+    if p.exists() and is_valid_file(p):
+        print(f'✅ cf_clearance 已刷新，使用 storage_state: {p}')
+        return str(p)
+
+    print('⚠️ cf_clearance 仍不可用或刷新失败；将按无 storage_state 跑流程（可能触发 Challenge）。')
+    return None
+
+
 def build_browser(image_dir) -> Browser:
     """构造 Browser 实例,优先使用真实 Chrome profile 以绕过 Cloudflare 人机验证.
 
@@ -95,6 +147,9 @@ def build_browser(image_dir) -> Browser:
     profile 被占用而启动失败.建议为爬虫单独建一个已登录过目标站点的 profile 目录.
     """
     proxy = _build_proxy_from_env()
+
+    # ensure storage_state is present and fresh if configured
+    refreshed = _ensure_storage_state_valid()
 
     # 主方案:注入 Scrapling 取得的 cf_clearance 等 cookie(storage_state),
     # 让浏览器揣着"已通过人机验证的通行证"进站,跳过 Cloudflare Turnstile.

@@ -186,32 +186,93 @@ async def fetch_detail_overview_in_browser(
     """
     在浏览器上下文 fetch 详情页并按 config 解析,返回 ``{标签: 值}`` 字典.
 
-    任何失败(无 URL / config 无效 / 浏览器异常 / HTTP 错误 / 解析失败)都优雅
-    返回 ``{}``,绝不抛出,以免影响图片下载主流程.
+    使用并发信号量和本地缓存以减少对 CDP 的阻塞与重复请求。任何失败都优雅返回空 dict。
     """
     detail_url = str(detail_url or '').strip()
     if not detail_url or not overview_config_is_active(config):
         return {}
+
+    # simple cache key
+    cache_key = detail_url + '|' + json_module.dumps(config or {}, ensure_ascii=False)
+    now = time.time()
+    cached = _OVERVIEW_HTTP_CACHE.get(cache_key)
+    if cached and now - cached[0] < _DETAIL_OVERVIEW_CACHE_TTL:
+        return cached[1]
+
+    # browser-side concurrency semaphore + evaluate timeout
+    # configurable via DETAIL_OVERVIEW_BROWSER_CONCURRENCY and DETAIL_OVERVIEW_CACHE_TTL
     try:
-        data = await evaluate_js_in_browser(
-            browser_session, build_detail_overview_js(detail_url, config)
-        )
+        browser_conc = int(os.environ.get('DETAIL_OVERVIEW_BROWSER_CONCURRENCY', '4'))
     except Exception:
-        return {}
-    if not isinstance(data, dict) or not data.get('success'):
-        return {}
-    overview = data.get('overview') or {}
-    if not isinstance(overview, dict):
-        return {}
-    return {str(k): str(v) for k, v in overview.items() if str(k).strip() and str(v).strip()}
+        browser_conc = 4
+
+    # lazily create semaphore in module-level variable if not exists
+    global _DETAIL_OVERVIEW_BROWSER_SEMAPHORE, _OVERVIEW_BROWSER_CACHE
+    try:
+        _DETAIL_OVERVIEW_BROWSER_SEMAPHORE
+    except NameError:
+        _DETAIL_OVERVIEW_BROWSER_SEMAPHORE = asyncio.Semaphore(browser_conc)
+    try:
+        _OVERVIEW_BROWSER_CACHE
+    except NameError:
+        _OVERVIEW_BROWSER_CACHE = {}
+
+    # check browser-side cache first
+    bcache = _OVERVIEW_BROWSER_CACHE.get(cache_key)
+    if bcache and now - bcache[0] < _DETAIL_OVERVIEW_CACHE_TTL:
+        return bcache[1]
+
+    async with _DETAIL_OVERVIEW_BROWSER_SEMAPHORE:
+        # double-check caches after acquiring semaphore
+        now = time.time()
+        cached = _OVERVIEW_HTTP_CACHE.get(cache_key)
+        if cached and now - cached[0] < _DETAIL_OVERVIEW_CACHE_TTL:
+            return cached[1]
+        bcache = _OVERVIEW_BROWSER_CACHE.get(cache_key)
+        if bcache and now - bcache[0] < _DETAIL_OVERVIEW_CACHE_TTL:
+            return bcache[1]
+
+        try:
+            # limit evaluate_js_in_browser time to avoid long CDP stalls
+            data = await asyncio.wait_for(
+                evaluate_js_in_browser(browser_session, build_detail_overview_js(detail_url, config)),
+                timeout=30.0,
+            )
+        except Exception:
+            return {}
+
+        if not isinstance(data, dict) or not data.get('success'):
+            return {}
+        overview = data.get('overview') or {}
+        if not isinstance(overview, dict):
+            return {}
+
+        result = {str(k): str(v) for k, v in overview.items() if str(k).strip() and str(v).strip()}
+        # cache both browser-cache and http-cache (single cache for simplicity)
+        ts = time.time()
+        _OVERVIEW_BROWSER_CACHE[cache_key] = (ts, result)
+        _OVERVIEW_HTTP_CACHE[cache_key] = (ts, result)
+        return result
 
 
 # Fallback: server-side HTML parse using httpx + BeautifulSoup
-async def fetch_detail_overview_via_http(detail_url: str, config: dict) -> dict:
-    """Fallback parser that fetches page HTML via httpx and parses labels/values with BeautifulSoup.
+# Non-blocking async version with simple in-memory cache and concurrency limit
+import asyncio
+import os
+import time
 
-    Returns a dict of extracted fields. This is useful for local smoke tests when a browser CDP
-    session is not available. It mirrors the behavior of the in-browser JS extractor.
+# concurrency and cache TTL configurable via env
+_DETAIL_OVERVIEW_HTTP_CONCURRENCY = int(os.environ.get('DETAIL_OVERVIEW_HTTP_CONCURRENCY', '6'))
+_DETAIL_OVERVIEW_CACHE_TTL = int(os.environ.get('DETAIL_OVERVIEW_CACHE_TTL', '600'))
+_DETAIL_OVERVIEW_HTTP_SEMAPHORE = asyncio.Semaphore(_DETAIL_OVERVIEW_HTTP_CONCURRENCY)
+_OVERVIEW_HTTP_CACHE: dict[str, tuple[float, dict]] = {}
+
+async def fetch_detail_overview_via_http(detail_url: str, config: dict) -> dict:
+    """Async fallback parser using httpx.AsyncClient + BeautifulSoup.
+
+    Uses a semaphore to limit concurrent HTTP fetches and a simple in-memory cache
+    (TTL controlled by DETAIL_OVERVIEW_CACHE_TTL) to avoid re-fetching the same
+    detail pages in a short window.
     """
     try:
         import httpx
@@ -222,111 +283,131 @@ async def fetch_detail_overview_via_http(detail_url: str, config: dict) -> dict:
     detail_url = str(detail_url or '').strip()
     if not detail_url or not overview_config_is_active(config):
         return {}
-    try:
-        resp = httpx.get(detail_url, timeout=20.0)
-        if resp.status_code != 200:
-            return {}
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        def clean(s):
-            return ' '.join(str(s or '').split()).strip()
 
-        overview = {}
-        order = []
-        def put(k, v):
-            k2 = clean(k)
-            v2 = clean(v)
-            if k2 and v2 and k2 not in overview:
-                overview[k2] = v2
-                order.append(k2)
+    cache_key = detail_url + '|' + json_module.dumps(config or {}, ensure_ascii=False)
+    now = time.time()
+    cached = _OVERVIEW_HTTP_CACHE.get(cache_key)
+    if cached and now - cached[0] < _DETAIL_OVERVIEW_CACHE_TTL:
+        return cached[1]
 
-        def value_of(el, value_selector=None):
-            if value_selector:
-                vs = [clean(x.get_text()) for x in el.select(value_selector)]
-                joined = ', '.join(dict.fromkeys([v for v in vs if v]))
-                if joined:
-                    return joined
-            links = [clean(a.get_text()) for a in el.find_all('a')]
-            joined_links = ', '.join(dict.fromkeys([l for l in links if l]))
-            if joined_links:
-                return joined_links
-            return ''
+    async with _DETAIL_OVERVIEW_HTTP_SEMAPHORE:
+        # double-check cache after acquiring semaphore
+        cached = _OVERVIEW_HTTP_CACHE.get(cache_key)
+        if cached and now - cached[0] < _DETAIL_OVERVIEW_CACHE_TTL:
+            return cached[1]
 
-        # header fields
-        for hf in (config.get('header_fields') or []):
-            if not hf or not hf.get('selector') or not hf.get('label'):
-                continue
-            el = soup.select_one(hf['selector'])
-            if el:
-                put(hf['label'], el.get_text())
-
-        # heuristics
         try:
-            press = soup.select_one('.collectionheader__pressmark h1, .collectionheader h1, .pressmark, .collection-pressmark, .collectionheader__pressmark')
-            if press:
-                put('Pressmark', press.get_text())
-            title = soup.select_one('h1, h2')
-            if title:
-                put('Title', title.get_text())
-            potential = [clean(x.get_text()) for x in soup.select('h1, h2, h3, .pressmark, .collectionheader__pressmark, .collectionheader')]
-            import re
-            id_re = re.compile(r'\b[A-Z][-A-Z0-9]{2,}\.??\d+\b')
-            for t in potential:
-                if not t: continue
-                m = id_re.search(t)
-                if m:
-                    put('Identifier', m.group(0))
-                    break
-        except Exception:
-            pass
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.get(detail_url)
+            if resp.status_code != 200:
+                return {}
+            text = resp.text
+            soup = BeautifulSoup(text, 'html.parser')
 
-        mode = str(config.get('mode') or 'sections').strip().lower()
-        if mode == 'dl':
-            container = config.get('section_selector') or 'dl'
-            for dl in soup.select(container):
-                dts = dl.find_all('dt')
-                dds = dl.find_all('dd')
-                n = min(len(dts), len(dds))
-                for i in range(n):
-                    put(dts[i].get_text(), dds[i].get_text())
-        elif mode == 'table':
-            container = config.get('section_selector') or 'table'
-            for tr in soup.select(container + ' tr'):
-                th = tr.find('th')
-                td = tr.find('td')
-                if th and td:
-                    put(th.get_text(), td.get_text())
-        else:
-            section_sel = config.get('section_selector') or '.detaildropdown__section, .detail-section, .detail-section__item, .metadata__item, .detaildropdown__row, dl'
-            label_sel = config.get('label_selector') or 'h4'
-            for sel in [s.strip() for s in section_sel.split(',') if s.strip()]:
-                for sec in soup.select(sel):
-                    lbl = sec.select_one(label_sel) or sec.find(['strong', 'b'])
-                    if not lbl:
-                        continue
-                    label = clean(lbl.get_text())
-                    if not label:
-                        continue
-                    value = value_of(sec, config.get('value_selector'))
-                    if not value:
-                        clone_text = ''.join([x.get_text() for x in sec.find_all(text=True)])
-                        # remove label text
-                        try:
-                            clone_text = clone_text.replace(lbl.get_text(), '')
-                        except Exception:
-                            pass
-                        value = clean(clone_text)
-                    put(label, value)
-            # fallback dl
+            def clean(s):
+                return ' '.join(str(s or '').split()).strip()
+
+            overview: dict = {}
+            order: list[str] = []
+
+            def put(k, v):
+                k2 = clean(k)
+                v2 = clean(v)
+                if k2 and v2 and k2 not in overview:
+                    overview[k2] = v2
+                    order.append(k2)
+
+            def value_of(el, value_selector=None):
+                if value_selector:
+                    vs = [clean(x.get_text()) for x in el.select(value_selector)]
+                    joined = ', '.join(dict.fromkeys([v for v in vs if v]))
+                    if joined:
+                        return joined
+                links = [clean(a.get_text()) for a in el.find_all('a')]
+                joined_links = ', '.join(dict.fromkeys([l for l in links if l]))
+                if joined_links:
+                    return joined_links
+                return ''
+
+            # header fields
+            for hf in (config.get('header_fields') or []):
+                if not hf or not hf.get('selector') or not hf.get('label'):
+                    continue
+                el = soup.select_one(hf['selector'])
+                if el:
+                    put(hf['label'], el.get_text())
+
+            # heuristics
             try:
-                for dl in soup.select('dl'):
+                press = soup.select_one('.collectionheader__pressmark h1, .collectionheader h1, .pressmark, .collection-pressmark, .collectionheader__pressmark')
+                if press:
+                    put('Pressmark', press.get_text())
+                title = soup.select_one('h1, h2')
+                if title:
+                    put('Title', title.get_text())
+                potential = [clean(x.get_text()) for x in soup.select('h1, h2, h3, .pressmark, .collectionheader__pressmark, .collectionheader')]
+                import re
+                id_re = re.compile(r'\b[A-Z][-A-Z0-9]{2,}\.??\d+\b')
+                for t in potential:
+                    if not t:
+                        continue
+                    m = id_re.search(t)
+                    if m:
+                        put('Identifier', m.group(0))
+                        break
+            except Exception:
+                pass
+
+            mode = str(config.get('mode') or 'sections').strip().lower()
+            if mode == 'dl':
+                container = config.get('section_selector') or 'dl'
+                for dl in soup.select(container):
                     dts = dl.find_all('dt')
                     dds = dl.find_all('dd')
                     n = min(len(dts), len(dds))
                     for i in range(n):
                         put(dts[i].get_text(), dds[i].get_text())
-            except Exception:
-                pass
+            elif mode == 'table':
+                container = config.get('section_selector') or 'table'
+                for tr in soup.select(container + ' tr'):
+                    th = tr.find('th')
+                    td = tr.find('td')
+                    if th and td:
+                        put(th.get_text(), td.get_text())
+            else:
+                section_sel = config.get('section_selector') or '.detaildropdown__section, .detail-section, .detail-section__item, .metadata__item, .detaildropdown__row, dl'
+                label_sel = config.get('label_selector') or 'h4'
+                for sel in [s.strip() for s in section_sel.split(',') if s.strip()]:
+                    for sec in soup.select(sel):
+                        lbl = sec.select_one(label_sel) or sec.find(['strong', 'b'])
+                        if not lbl:
+                            continue
+                        label = clean(lbl.get_text())
+                        if not label:
+                            continue
+                        value = value_of(sec, config.get('value_selector'))
+                        if not value:
+                            clone_text = ''.join([x.get_text() for x in sec.find_all(text=True)])
+                            try:
+                                clone_text = clone_text.replace(lbl.get_text(), '')
+                            except Exception:
+                                pass
+                            value = clean(clone_text)
+                        put(label, value)
+                # fallback dl
+                try:
+                    for dl in soup.select('dl'):
+                        dts = dl.find_all('dt')
+                        dds = dl.find_all('dd')
+                        n = min(len(dts), len(dds))
+                        for i in range(n):
+                            put(dts[i].get_text(), dds[i].get_text())
+                except Exception:
+                    pass
 
-        return overview
-    except Exception:
-        return {}
+            # cache and return
+            _OVERVIEW_HTTP_CACHE[cache_key] = (time.time(), overview)
+            return overview
+        except Exception:
+            return {}
+

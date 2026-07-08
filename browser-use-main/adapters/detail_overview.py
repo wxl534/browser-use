@@ -234,17 +234,23 @@ async def fetch_detail_overview_in_browser(
 
         try:
             # limit evaluate_js_in_browser time to avoid long CDP stalls
+            start = time.time()
             data = await asyncio.wait_for(
                 evaluate_js_in_browser(browser_session, build_detail_overview_js(detail_url, config)),
                 timeout=30.0,
             )
+            elapsed = time.time() - start
+            _OVERVIEW_METRICS['total_eval_time_sec'] += elapsed
         except Exception:
+            _OVERVIEW_METRICS['browser_failures'] += 1
             return {}
 
         if not isinstance(data, dict) or not data.get('success'):
+            _OVERVIEW_METRICS['browser_failures'] += 1
             return {}
         overview = data.get('overview') or {}
         if not isinstance(overview, dict):
+            _OVERVIEW_METRICS['browser_failures'] += 1
             return {}
 
         result = {str(k): str(v) for k, v in overview.items() if str(k).strip() and str(v).strip()}
@@ -252,6 +258,7 @@ async def fetch_detail_overview_in_browser(
         ts = time.time()
         _OVERVIEW_BROWSER_CACHE[cache_key] = (ts, result)
         _OVERVIEW_HTTP_CACHE[cache_key] = (ts, result)
+        _OVERVIEW_METRICS['browser_success'] += 1
         return result
 
 
@@ -266,6 +273,28 @@ _DETAIL_OVERVIEW_HTTP_CONCURRENCY = int(os.environ.get('DETAIL_OVERVIEW_HTTP_CON
 _DETAIL_OVERVIEW_CACHE_TTL = int(os.environ.get('DETAIL_OVERVIEW_CACHE_TTL', '600'))
 _DETAIL_OVERVIEW_HTTP_SEMAPHORE = asyncio.Semaphore(_DETAIL_OVERVIEW_HTTP_CONCURRENCY)
 _OVERVIEW_HTTP_CACHE: dict[str, tuple[float, dict]] = {}
+
+# Lightweight metrics for monitoring throughput and cache behavior
+_OVERVIEW_METRICS = {
+    'total_requests': 0,
+    'cache_hits': 0,
+    'cache_misses': 0,
+    'http_success': 0,
+    'http_failures': 0,
+    'browser_success': 0,
+    'browser_failures': 0,
+    'total_eval_time_sec': 0.0,
+}
+
+
+def get_overview_metrics(reset: bool = False) -> dict:
+    """Return current metrics; if reset True, zero counters after read."""
+    data = dict(_OVERVIEW_METRICS)
+    if reset:
+        for k in _OVERVIEW_METRICS:
+            _OVERVIEW_METRICS[k] = 0 if isinstance(_OVERVIEW_METRICS[k], int) else 0.0
+    return data
+
 
 async def fetch_detail_overview_via_http(detail_url: str, config: dict) -> dict:
     """Async fallback parser using httpx.AsyncClient + BeautifulSoup.
@@ -286,21 +315,27 @@ async def fetch_detail_overview_via_http(detail_url: str, config: dict) -> dict:
 
     cache_key = detail_url + '|' + json_module.dumps(config or {}, ensure_ascii=False)
     now = time.time()
+    _OVERVIEW_METRICS['total_requests'] += 1
     cached = _OVERVIEW_HTTP_CACHE.get(cache_key)
     if cached and now - cached[0] < _DETAIL_OVERVIEW_CACHE_TTL:
+        _OVERVIEW_METRICS['cache_hits'] += 1
         return cached[1]
+    _OVERVIEW_METRICS['cache_misses'] += 1
 
     async with _DETAIL_OVERVIEW_HTTP_SEMAPHORE:
         # double-check cache after acquiring semaphore
         cached = _OVERVIEW_HTTP_CACHE.get(cache_key)
         if cached and now - cached[0] < _DETAIL_OVERVIEW_CACHE_TTL:
+            _OVERVIEW_METRICS['cache_hits'] += 1
             return cached[1]
 
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.get(detail_url)
             if resp.status_code != 200:
+                _OVERVIEW_METRICS['http_failures'] += 1
                 return {}
+            _OVERVIEW_METRICS['http_success'] += 1
             text = resp.text
             soup = BeautifulSoup(text, 'html.parser')
 
